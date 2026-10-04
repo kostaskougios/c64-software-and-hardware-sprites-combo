@@ -38,51 +38,34 @@ for n, block in enumerate(blocks):
     out.append("    !byte 0")
     out.append("")
 
-# The hires contour is one bitmap pixel wide; the hardware sprite expands each
-# source cell to 4x2. Keep the outer contour and detail contours as separate
-# lists so the latter can follow light-grey face, neck, and body feature areas.
-solid = set()
-for y, row in enumerate(blocks[0]):
-    row = row.ljust(12, ".")
-    for x, char in enumerate(row):
-        if char != ".":
-            solid.update((xx, yy) for yy in range(y * 2, y * 2 + 2)
-                         for xx in range(x * 4, x * 4 + 4))
-outline = set()
-for x, y in solid:
-    for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
-        p = (x + dx, y + dy)
-        if p not in solid and 0 <= p[0] < 48 and 0 <= p[1] < 42:
-            outline.add(p)
-points = sorted(outline, key=lambda p: (p[1], p[0]))
-if len(points) > 255:
-    raise SystemExit("Outline exceeds the assembly loop's 255 point limit")
-out += ["OutlineCount = " + str(len(points)), "OutlineData:"]
-flat = [v for point in points for v in point]
-for i in range(0, len(flat), 16):
-    out.append(asm_bytes(flat[i:i+16]))
+# Precombine the outer contour and feature contours into 42 scanlines of six
+# bytes. The assembly shifts each scanline to the actor's pixel X alignment,
+# then ORs whole bytes into the hires bitmap instead of plotting each pixel.
 for n, block in enumerate(blocks):
+    solid = set()
     detail_solid = set()
     for y, row in enumerate(block):
         row = row.ljust(12, ".")
         for x, char in enumerate(row):
+            expanded = {(xx, yy) for yy in range(y * 2, y * 2 + 2)
+                        for xx in range(x * 4, x * 4 + 4)}
+            if char != ".":
+                solid.update(expanded)
             if char == "1":
-                detail_solid.update((xx, yy) for yy in range(y * 2, y * 2 + 2)
-                                    for xx in range(x * 4, x * 4 + 4))
-    detail_outline = set()
-    for x, y in detail_solid:
-        for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
-            p = (x + dx, y + dy)
-            if p not in detail_solid and 0 <= p[0] < 48 and 0 <= p[1] < 42:
-                detail_outline.add(p)
-    detail_points = sorted(detail_outline, key=lambda p: (p[1], p[0]))
-    if len(detail_points) > 255:
-        raise SystemExit("Detail outline exceeds the assembly loop's 255 point limit")
-    out += [f"DetailCount{n} = {len(detail_points)}", f"DetailData{n}:"]
-    flat = [v for point in detail_points for v in point]
-    for i in range(0, len(flat), 16):
-        out.append(asm_bytes(flat[i:i+16]))
-out += ["DetailDataLo:", "    !byte " + ",".join(f"<DetailData{n}" for n in range(4)),
-        "DetailDataHi:", "    !byte " + ",".join(f">DetailData{n}" for n in range(4)),
-        "DetailCounts:", "    !byte " + ",".join(f"DetailCount{n}" for n in range(4))]
+                detail_solid.update(expanded)
+    contour = set()
+    for shape in (solid, detail_solid):
+        for x, y in shape:
+            for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+                p = (x + dx, y + dy)
+                if p not in shape and 0 <= p[0] < 48 and 0 <= p[1] < 42:
+                    contour.add(p)
+    rows = bytearray(42 * 6)
+    for x, y in contour:
+        rows[y * 6 + x // 8] |= 0x80 >> (x & 7)
+    out.append(f"ContourData{n}:")
+    for i in range(0, len(rows), 16):
+        out.append(asm_bytes(rows[i:i+16]))
+out += ["ContourDataLo:", "    !byte " + ",".join(f"<ContourData{n}" for n in range(4)),
+        "ContourDataHi:", "    !byte " + ",".join(f">ContourData{n}" for n in range(4))]
 (ROOT / "src/generated_sprites.asm").write_text("\n".join(out) + "\n")

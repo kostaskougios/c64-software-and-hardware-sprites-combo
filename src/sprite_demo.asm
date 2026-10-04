@@ -25,7 +25,7 @@ MinX = 16
 MaxX = 255
 MinY = 20
 MaxY = 136
-PointPtr = $02                  ; unused KERNAL/BASIC zero-page workspace
+SourcePtr = $02                 ; unused KERNAL/BASIC zero-page workspace
 Ptr = $04
 
 Start:
@@ -71,7 +71,7 @@ Start:
 
 Frame:
     ; Draw into the hidden bank. Bank 3's $e000 bitmap is under KERNAL ROM,
-    ; so temporarily map the ROM out while reading/writing that buffer.
+    ; so temporarily map the ROM out while clearing/drawing that buffer.
     lda BackBitmapHi
     cmp #$e0
     bne RenderBack
@@ -80,14 +80,14 @@ Frame:
     sta SavedCpuPort
     and #$fd
     sta $01
-    jsr CopyBackgroundToBack
+    jsr ClearBackBitmap
     jsr DrawActors
     lda SavedCpuPort
     sta $01
     cli
     jmp RenderComplete
 RenderBack:
-    jsr CopyBackgroundToBack
+    jsr ClearBackBitmap
     jsr DrawActors
 RenderComplete:
     ; Swap only at the bottom border. The visible bitmap remains intact while
@@ -124,109 +124,110 @@ DrawActor:
     bne DrawActor
     rts
 
-; ---------------------------------------------------------------------------
-; Public routine: DrawOutline
-; Inputs: BaseX and BaseY are unsigned bitmap coordinates for the top-left of
-;         the 48x42 colour sprite (X 0..271, Y 0..158).
-; Clobbers: A, X, Y, Ptr, point cursor and count. Output: contour is ORed
-;           into the hires bitmap. Call after clearing/restoring the background.
-; ---------------------------------------------------------------------------
+; Draw the actor's precombined scanline mask into the back-buffer bitmap.
+; One 48x42 outline/detail mask is stored per design; the right shift handles
+; arbitrary pixel X positions while each nonzero bitmap byte is touched once.
 DrawOutline:
-    lda #<OutlineData
-    sta PointPtr
-    lda #>OutlineData
-    sta PointPtr+1
-    lda #OutlineCount
-    sta PointsLeft
-    lda #$00
-    sta PointsLeft+1
-    jsr DrawPointList
     ldx ActorIndex
     txa
-    and #$03                    ; four character drawings are shared by eight actors
+    and #$03
     tax
-    lda DetailDataLo,x
-    sta PointPtr
-    lda DetailDataHi,x
-    sta PointPtr+1
-    lda DetailCounts,x
-    sta PointsLeft
+    lda ContourDataLo,x
+    sta SourcePtr
+    lda ContourDataHi,x
+    sta SourcePtr+1
+    lda BaseX
+    and #$07
+    sta HorizontalShift
     lda #$00
-    sta PointsLeft+1
-    jsr DrawPointList
-    rts
-
-DrawPointList:
-    lda PointsLeft
-    ora PointsLeft+1
-    beq DrawPointListDone
-DrawPoint:
+    sta ContourRow
+DrawContourRow:
     ldy #$00
-    lda (PointPtr),y
-    clc
-    adc BaseX
-    sta PixelX
+LoadContourByte:
+    lda (SourcePtr),y
+    sta RowScratch,y
+    iny
+    cpy #$06
+    bne LoadContourByte
     lda #$00
-    adc #$00
-    sta PixelXHi
-    inc PointPtr
-    bne DrawPointXReady
-    inc PointPtr+1
-DrawPointXReady:
-    lda (PointPtr),y
+    sta RowScratch+6
+    ldx HorizontalShift
+    beq ContourShifted
+ShiftContourRow:
+    lda RowScratch
+    lsr
+    sta RowScratch
+    lda RowScratch+1
+    ror
+    sta RowScratch+1
+    lda RowScratch+2
+    ror
+    sta RowScratch+2
+    lda RowScratch+3
+    ror
+    sta RowScratch+3
+    lda RowScratch+4
+    ror
+    sta RowScratch+4
+    lda RowScratch+5
+    ror
+    sta RowScratch+5
+    lda RowScratch+6
+    ror
+    sta RowScratch+6
+    dex
+    bne ShiftContourRow
+ContourShifted:
+    lda BaseY
     clc
-    adc BaseY
+    adc ContourRow
     sta PixelY
-    inc PointPtr
-    bne DrawPointYReady
-    inc PointPtr+1
-DrawPointYReady:
-    jsr PlotPixel
-    lda PointsLeft
-    bne DrawPointDecLow
-    dec PointsLeft+1
-DrawPointDecLow:
-    dec PointsLeft
-    lda PointsLeft
-    ora PointsLeft+1
-    bne DrawPoint
-DrawPointListDone:
-    rts
-
-; Public routine: PlotPixel
-; Inputs: PixelX (low byte), PixelXHi (0 or 1), PixelY (0..199).
-;         Together the X inputs describe coordinates 0..319.
-; Clobbers: A, X, Y, Ptr. Pixels are black over the colored bitmap background.
-PlotPixel:
-    ; Bitmap bytes are stored as 8x8 character cells, not scanline rows:
-    ; base + (Y/8)*320 + (X/8)*8 + (Y mod 8).
-    ldy PixelY
+    tay
     lda RowLo,y
     sta Ptr
     lda RowHi,y
     clc
     adc BackBitmapHi
     sta Ptr+1
-    ; Add (X/8)*8, which is X rounded down to a multiple of eight.
-    lda PixelX
+    lda BaseX
     and #$f8
     clc
     adc Ptr
     sta Ptr
-    bcc PlotNoXCarry
+    bcc ContourRowAddressReady
     inc Ptr+1
-PlotNoXCarry:
-    lda PixelXHi
-    beq PlotColumnReady
-    inc Ptr+1                   ; X=256..319 adds the ninth-bit column
-PlotColumnReady:
-    lda PixelX
-    and #$07
-    tax
-    lda BitMask,x
+ContourRowAddressReady:
+    ldx #$00
+WriteContourByte:
+    lda RowScratch,x
+    beq SkipContourByte
     ldy #$00
     ora (Ptr),y
     sta (Ptr),y
+SkipContourByte:
+    clc
+    lda Ptr
+    adc #$08
+    sta Ptr
+    bcc ContourColumnReady
+    inc Ptr+1
+ContourColumnReady:
+    inx
+    cpx #$07
+    bne WriteContourByte
+    clc
+    lda SourcePtr
+    adc #$06
+    sta SourcePtr
+    bcc ContourSourceReady
+    inc SourcePtr+1
+ContourSourceReady:
+    inc ContourRow
+    lda ContourRow
+    cmp #$2a
+    beq DrawContourDone
+    jmp DrawContourRow
+DrawContourDone:
     rts
 
 InitScreenColors:
@@ -276,6 +277,36 @@ CopyToBank3Column:
     beq CopyToBank3Done
     jmp CopyToBank3Column
 CopyToBank3Done:
+    rts
+
+; The background bitmap has no foreground artwork; only actor contours are
+; drawn into it. Clear the hidden bitmap directly instead of copying 8 KB.
+ClearBackBitmap:
+    lda BackBitmapHi
+    cmp #$60
+    beq ClearToBank1
+    lda #$00
+    ldx #$00
+ClearToBank3Column:
+    !for .page, $e0, $ff {
+        sta .page * $100,x
+    }
+    inx
+    beq ClearToBank3Done
+    jmp ClearToBank3Column
+ClearToBank3Done:
+    rts
+ClearToBank1:
+    lda #$00
+    ldx #$00
+ClearToBank1Column:
+    !for .page, $60, $7f {
+        sta .page * $100,x
+    }
+    inx
+    beq ClearToBank1Done
+    jmp ClearToBank1Column
+ClearToBank1Done:
     rts
 
 InitSprites:
@@ -402,7 +433,6 @@ WaitRasterEnd:
     rts
 
 ; Lookup tables are included below the executable routines.
-BitMask: !byte $80,$40,$20,$10,$08,$04,$02,$01
 RowLo:
     !for .y, 0, 199 {
         !byte <((.y & $f8)*40 + (.y & $07))
@@ -424,10 +454,10 @@ VelY:           !byte 2,1,$fe,$ff,$ff,2,1,$fe
 ActorIndex:     !byte 0
 BaseX:          !byte 0
 BaseY:          !byte 0
-PixelX:         !byte 0
-PixelXHi:       !byte 0
 PixelY:         !byte 0
-PointsLeft:     !word 0
+HorizontalShift: !byte 0
+ContourRow:     !byte 0
+RowScratch:     !fill 7, 0
 BackBitmapHi:   !byte $e0
 BackBank:       !byte $00
 SavedCpuPort:   !byte $37

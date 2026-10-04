@@ -30,15 +30,11 @@ it directly with `x64sc -autostart build/sprite-demo.prg`.
 ## Assembly routines
 
 `DrawOutline` takes `BaseX` and `BaseY`, the top-left bitmap coordinate of the
-48x42 expanded character. It plots the black outer contour and fine feature
-lines into the back-buffer hires bitmap, then gives those bitmap foreground
-pixels priority over the hardware sprites. `PlotPixel` accounts for the
-VIC-II's 8x8 character-cell bitmap layout.
-`PlotPixel` takes `PixelX` as a low byte plus `PixelXHi` (0 or 1), and
-`PixelY` (0..199), then sets one black pixel. The routines use the shared
-workspace in the assembly and clobber A, X, Y, and `Ptr`. The caller clears or
-restores the back buffer before drawing; the demo copies the static background
-to that buffer before adding all eight outlines.
+48x42 expanded character. It draws a precombined 42-row mask of the outer
+contour and fine feature lines. Each row is shifted to the actor's pixel
+alignment and merged into the back-buffer bitmap a byte at a time. The caller
+clears the hidden bitmap before drawing; the colored background uses the
+screen-memory color bytes and remains static.
 
 The sprite converter packs four 12x21 multicolour pixels per row into the
 VIC-II's three-byte row format and derives an expanded hires contour from the
