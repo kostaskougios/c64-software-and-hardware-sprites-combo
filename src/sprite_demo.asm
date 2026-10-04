@@ -14,6 +14,7 @@ VIC_RASTER     = $d012
 VIC_SPR_MCOLOR = $d01c
 VIC_SPR_XEXP   = $d01d
 VIC_SPR_YEXP   = $d017
+VIC_SPR_PRIORITY = $d01b
 VIC_BG         = $d021
 VIC_MC0        = $d025
 VIC_MC1        = $d026
@@ -41,9 +42,11 @@ Start:
     ora #$02
     sta $dd00
     lda #$0f
-    sta VIC_MC0                 ; light grey
+    sta VIC_MC0                 ; light grey feature fill under hires ink
     lda #$02
     sta VIC_MC1                 ; red
+    lda #$0f
+    sta VIC_SPR_PRIORITY        ; hires foreground detail draws over sprites 0-3
 
     ; Hires bitmap mode, 320x200. Screen RAM $4400, bitmap $6000.
     lda #$3b
@@ -137,6 +140,23 @@ DrawOutline:
     sta PointsLeft
     lda #$00
     sta PointsLeft+1
+    jsr DrawPointList
+    ldx ActorIndex
+    lda DetailDataLo,x
+    sta PointPtr
+    lda DetailDataHi,x
+    sta PointPtr+1
+    lda DetailCounts,x
+    sta PointsLeft
+    lda #$00
+    sta PointsLeft+1
+    jsr DrawPointList
+    rts
+
+DrawPointList:
+    lda PointsLeft
+    ora PointsLeft+1
+    beq DrawPointListDone
 DrawPoint:
     ldy #$00
     lda (PointPtr),y
@@ -167,12 +187,13 @@ DrawPointDecLow:
     lda PointsLeft
     ora PointsLeft+1
     bne DrawPoint
+DrawPointListDone:
     rts
 
 ; Public routine: PlotPixel
 ; Inputs: PixelX (low byte), PixelXHi (0 or 1), PixelY (0..199).
 ;         Together the X inputs describe coordinates 0..319.
-; Clobbers: A, X, Y, Ptr. Pixels are white over a black background.
+; Clobbers: A, X, Y, Ptr. Pixels are black over the colored bitmap background.
 PlotPixel:
     ; Bitmap bytes are stored as 8x8 character cells, not scanline rows:
     ; base + (Y/8)*320 + (X/8)*8 + (Y mod 8).

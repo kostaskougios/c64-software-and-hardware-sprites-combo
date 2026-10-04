@@ -10,8 +10,8 @@ The demo uses one hardware sprite per character and one shared bitmap outline
 shape. The characters bounce inside the visible bitmap area. It renders the
 next hires frame into a hidden VIC-II bank, then switches banks at the bottom
 of the screen. The previous frame stays visible while the next outline is drawn,
-so the contours do not disappear during rendering. A generated star field and
-colored, pixel-art hills provide a static background in both buffers.
+so the contours do not disappear during rendering. Colored, pixel-art hills
+and a river provide a static background in both buffers.
 
 ## Build and run
 
@@ -29,8 +29,10 @@ it directly with `x64sc -autostart build/sprite-demo.prg`.
 ## Assembly routines
 
 `DrawOutline` takes `BaseX` and `BaseY`, the top-left bitmap coordinate of the
-48x42 expanded character. It plots a black contour into the back-buffer hires
-bitmap. `PlotPixel` accounts for the VIC-II's 8x8 character-cell bitmap layout.
+48x42 expanded character. It plots the black outer contour and fine feature
+lines into the back-buffer hires bitmap, then gives those bitmap foreground
+pixels priority over the hardware sprites. `PlotPixel` accounts for the
+VIC-II's 8x8 character-cell bitmap layout.
 `PlotPixel` takes `PixelX` as a low byte plus `PixelXHi` (0 or 1), and
 `PixelY` (0..199), then sets one black pixel. The routines use the shared
 workspace in the assembly and clobber A, X, Y, and `Ptr`. The caller clears or
@@ -39,9 +41,12 @@ to that buffer before adding the four outlines.
 
 The sprite converter packs four 12x21 multicolour pixels per row into the
 VIC-II's three-byte row format and derives an expanded hires contour from the
-silhouette. The background converter generates the stars, hills, and bitmap
-cell colors. Edit `data/characters.txt` (21 rows of up to 12 characters;
-`.` transparent, `1`/`2`/`3` colour codes) and run `make` to regenerate the
+silhouette. Code `1` marks light-grey feature areas; the converter derives
+one-pixel black detail contours around them, while the bitmap contour adds the
+external silhouette. The background converter generates the colored hills
+and bitmap cell colors. Edit `data/characters.txt`
+(21 rows of up to 12 characters; `.` transparent, `1` feature area,
+`2` shared color, `3` per-sprite color) and run `make` to regenerate the
 assembly data.
 
 ## Artwork

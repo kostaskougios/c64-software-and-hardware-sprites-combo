@@ -38,8 +38,9 @@ for n, block in enumerate(blocks):
     out.append("    !byte 0")
     out.append("")
 
-# A bitmap pixel is one C64 hires pixel. The colour sprite is expanded 4x2,
-# so outline the resulting 48x42 silhouette with one-pixel black pixels.
+# The hires contour is one bitmap pixel wide; the hardware sprite expands each
+# source cell to 4x2. Keep the outer contour and detail contours as separate
+# lists so the latter can follow light-grey face, neck, and body feature areas.
 solid = set()
 for y, row in enumerate(blocks[0]):
     row = row.ljust(12, ".")
@@ -60,4 +61,28 @@ out += ["OutlineCount = " + str(len(points)), "OutlineData:"]
 flat = [v for point in points for v in point]
 for i in range(0, len(flat), 16):
     out.append(asm_bytes(flat[i:i+16]))
+for n, block in enumerate(blocks):
+    detail_solid = set()
+    for y, row in enumerate(block):
+        row = row.ljust(12, ".")
+        for x, char in enumerate(row):
+            if char == "1":
+                detail_solid.update((xx, yy) for yy in range(y * 2, y * 2 + 2)
+                                    for xx in range(x * 4, x * 4 + 4))
+    detail_outline = set()
+    for x, y in detail_solid:
+        for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+            p = (x + dx, y + dy)
+            if p not in detail_solid and 0 <= p[0] < 48 and 0 <= p[1] < 42:
+                detail_outline.add(p)
+    detail_points = sorted(detail_outline, key=lambda p: (p[1], p[0]))
+    if len(detail_points) > 255:
+        raise SystemExit("Detail outline exceeds the assembly loop's 255 point limit")
+    out += [f"DetailCount{n} = {len(detail_points)}", f"DetailData{n}:"]
+    flat = [v for point in detail_points for v in point]
+    for i in range(0, len(flat), 16):
+        out.append(asm_bytes(flat[i:i+16]))
+out += ["DetailDataLo:", "    !byte " + ",".join(f"<DetailData{n}" for n in range(4)),
+        "DetailDataHi:", "    !byte " + ",".join(f">DetailData{n}" for n in range(4)),
+        "DetailCounts:", "    !byte " + ",".join(f"DetailCount{n}" for n in range(4))]
 (ROOT / "src/generated_sprites.asm").write_text("\n".join(out) + "\n")

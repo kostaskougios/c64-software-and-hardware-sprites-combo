@@ -4,31 +4,10 @@ from math import sin
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-W, H = 320, 200
 bitmap = bytearray(8192)
 
-def set_pixel(x: int, y: int) -> None:
-    offset = (y // 8) * 320 + (x // 8) * 8 + (y & 7)
-    bitmap[offset] |= 0x80 >> (x & 7)
-
-# Star points and a small crescent made from black hires pixels over the
-# colored per-cell sky behind them. The outline shares the hires foreground
-# color, so the background marks use black too.
-stars = [
-    (15, 17), (42, 52), (73, 25), (96, 68), (124, 37), (153, 19),
-    (178, 63), (204, 29), (229, 78), (251, 48), (289, 23), (306, 67),
-    (32, 91), (64, 112), (116, 88), (162, 103), (214, 95), (274, 105),
-]
-for x, y in stars:
-    set_pixel(x, y)
-for y in range(25, 46):
-    for x in range(261, 282):
-        dx, dy = x - 271, y - 35
-        if 76 <= dx * dx + dy * dy <= 100:
-            set_pixel(x, y)
-
-# Hires bitmap screen bytes: high nibble is the black outline/star ink;
-# low nibble is a per-cell background color.
+# The bitmap foreground is reserved for actor contours and internal detail.
+# The low nibble supplies the colored sky and hills behind transparent sprites.
 colors = bytearray(1024)
 for cy in range(25):
     y = cy * 8 + 4
