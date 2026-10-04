@@ -66,10 +66,12 @@ Start:
     jsr CopyBackgroundToBack
     lda #$00
     sta BackBank               ; bank 3 is the first back buffer
+    jsr SortActors
     jsr PositionAllSprites
     cli
 
 Frame:
+    jsr SortActors
     ; Draw into the hidden bank. Bank 3's $e000 bitmap is under KERNAL ROM,
     ; so temporarily map the ROM out while clearing/drawing that buffer.
     lda BackBitmapHi
@@ -109,25 +111,42 @@ RenderComplete:
 
 DrawActors:
     ldx #$00
-    stx ActorIndex
+    stx DrawOrderIndex
 DrawActor:
-    ldx ActorIndex
+    ldx DrawOrderIndex
+    lda RenderOrder,x
+    sta ActorIndex
+    tax
     lda ActorX,x
     sta BaseX
     lda ActorY,x
     sta BaseY
+    jsr ClearBitmapUnderActor
     jsr DrawOutline
-    ldx ActorIndex
-    inx
-    stx ActorIndex
-    cpx #$08
+    inc DrawOrderIndex
+    lda DrawOrderIndex
+    cmp #$08
     bne DrawActor
     rts
 
-; Draw the actor's precombined scanline mask into the back-buffer bitmap.
-; One 48x42 outline/detail mask is stored per design; the right shift handles
-; arbitrary pixel X positions while each nonzero bitmap byte is touched once.
+; Clear a farther actor's outline under this actor's opaque silhouette, then
+; draw this actor's own contour. Transparent parts leave farther contours intact.
+ClearBitmapUnderActor:
+    lda #$01
+    sta MaskMode
+    ldx ActorIndex
+    txa
+    and #$03
+    tax
+    lda SilhouetteDataLo,x
+    sta SourcePtr
+    lda SilhouetteDataHi,x
+    sta SourcePtr+1
+    jmp DrawActorMaskRows
+
 DrawOutline:
+    lda #$00
+    sta MaskMode
     ldx ActorIndex
     txa
     and #$03
@@ -136,24 +155,28 @@ DrawOutline:
     sta SourcePtr
     lda ContourDataHi,x
     sta SourcePtr+1
+    jmp DrawActorMaskRows
+
+; Draw or erase a precombined 48x42 mask, shifted for arbitrary actor X.
+DrawActorMaskRows:
     lda BaseX
     and #$07
     sta HorizontalShift
     lda #$00
-    sta ContourRow
-DrawContourRow:
+    sta MaskRow
+DrawMaskRow:
     ldy #$00
-LoadContourByte:
+LoadMaskByte:
     lda (SourcePtr),y
     sta RowScratch,y
     iny
     cpy #$06
-    bne LoadContourByte
+    bne LoadMaskByte
     lda #$00
     sta RowScratch+6
     ldx HorizontalShift
-    beq ContourShifted
-ShiftContourRow:
+    beq MaskShifted
+ShiftMaskRow:
     lda RowScratch
     lsr
     sta RowScratch
@@ -176,12 +199,11 @@ ShiftContourRow:
     ror
     sta RowScratch+6
     dex
-    bne ShiftContourRow
-ContourShifted:
+    bne ShiftMaskRow
+MaskShifted:
     lda BaseY
     clc
-    adc ContourRow
-    sta PixelY
+    adc MaskRow
     tay
     lda RowLo,y
     sta Ptr
@@ -194,40 +216,49 @@ ContourShifted:
     clc
     adc Ptr
     sta Ptr
-    bcc ContourRowAddressReady
+    bcc MaskRowAddressReady
     inc Ptr+1
-ContourRowAddressReady:
+MaskRowAddressReady:
     ldx #$00
-WriteContourByte:
+WriteMaskByte:
     lda RowScratch,x
-    beq SkipContourByte
+    beq SkipMaskByte
     ldy #$00
+    lda MaskMode
+    bne EraseMaskByte
+    lda RowScratch,x
     ora (Ptr),y
     sta (Ptr),y
-SkipContourByte:
+    jmp SkipMaskByte
+EraseMaskByte:
+    lda RowScratch,x
+    eor #$ff
+    and (Ptr),y
+    sta (Ptr),y
+SkipMaskByte:
     clc
     lda Ptr
     adc #$08
     sta Ptr
-    bcc ContourColumnReady
+    bcc MaskColumnReady
     inc Ptr+1
-ContourColumnReady:
+MaskColumnReady:
     inx
     cpx #$07
-    bne WriteContourByte
+    bne WriteMaskByte
     clc
     lda SourcePtr
     adc #$06
     sta SourcePtr
-    bcc ContourSourceReady
+    bcc MaskSourceReady
     inc SourcePtr+1
-ContourSourceReady:
-    inc ContourRow
-    lda ContourRow
+MaskSourceReady:
+    inc MaskRow
+    lda MaskRow
     cmp #$2a
-    beq DrawContourDone
-    jmp DrawContourRow
-DrawContourDone:
+    beq DrawMaskDone
+    jmp DrawMaskRow
+DrawMaskDone:
     rts
 
 InitScreenColors:
@@ -338,22 +369,42 @@ InitSpriteLoop:
     rts
 
 PositionAllSprites:
-    ldx #$00
+    lda #$00
+    sta SpriteSlot
 PositionAllLoop:
-    stx ActorIndex
+    lda #$07
+    sec
+    sbc SpriteSlot
+    tax
+    lda RenderOrder,x
+    sta ActorIndex
     jsr PositionSprite
-    ldx ActorIndex
-    inx
-    cpx #$08
+    inc SpriteSlot
+    lda SpriteSlot
+    cmp #$08
     bne PositionAllLoop
     rts
 
 PositionSprite:
-    ; VIC screen origin differs from bitmap origin by (24,50).
+    ; Sprite number determines VIC-II overlap priority: slot 0 is foremost.
+    ; Assign nearer actors (largest Y) to lower slots, preserving identity data.
     ldx ActorIndex
+    txa
+    and #$03
+    tax
+    ldy SpriteSlot
+    lda SpritePointers,x
+    sta SCREEN+$3f8,y
+    lda SpritePointersBack,x
+    sta SCREEN_BACK+$3f8,y
+    ldx ActorIndex
+    lda SpriteColors,x
+    ldx SpriteSlot
+    sta VIC_SPR0_COLOR,x
     txa
     asl
     tay
+    ldx ActorIndex
     lda ActorX,x
     clc
     adc #$18
@@ -363,17 +414,73 @@ PositionSprite:
     adc #$32
     sta $d001,y
     ; Rebuild the X high-bit register for all eight live sprites.
+    ldx SpriteSlot
     lda VIC_SPR_XMSB
     and ClearXmsb,x
     sta VIC_SPR_XMSB
+    ldx ActorIndex
     lda ActorX,x
     clc
     adc #$18
     bcc PositionDone
+    ldx SpriteSlot
     lda VIC_SPR_XMSB
     ora SetXmsb,x
     sta VIC_SPR_XMSB
 PositionDone:
+    rts
+
+; Stable bubble sort, farthest (smallest Y) to nearest (largest Y).
+; The same order composites bitmap outlines and assigns VIC-II sprite priority.
+SortActors:
+    ldx #$00
+SortInitOrder:
+    txa
+    sta RenderOrder,x
+    inx
+    cpx #$08
+    bne SortInitOrder
+    lda #$00
+    sta SortPass
+SortPassLoop:
+    lda #$00
+    sta SortIndex
+    lda #$07
+    sec
+    sbc SortPass
+    sta SortPassEnd
+SortPairLoop:
+    ldx SortIndex
+    lda RenderOrder,x
+    tax
+    lda ActorY,x
+    sta SortLeftY
+    ldx SortIndex
+    inx
+    lda RenderOrder,x
+    tax
+    lda ActorY,x
+    cmp SortLeftY
+    bcs SortNoSwap
+    ldx SortIndex
+    lda RenderOrder,x
+    sta SortTemp
+    inx
+    lda RenderOrder,x
+    dex
+    sta RenderOrder,x
+    inx
+    lda SortTemp
+    sta RenderOrder,x
+SortNoSwap:
+    inc SortIndex
+    lda SortIndex
+    cmp SortPassEnd
+    bcc SortPairLoop
+    inc SortPass
+    lda SortPass
+    cmp #$07
+    bne SortPassLoop
     rts
 
 MoveActors:
@@ -454,9 +561,17 @@ VelY:           !byte 2,1,$fe,$ff,$ff,2,1,$fe
 ActorIndex:     !byte 0
 BaseX:          !byte 0
 BaseY:          !byte 0
-PixelY:         !byte 0
 HorizontalShift: !byte 0
-ContourRow:     !byte 0
+MaskRow:        !byte 0
+MaskMode:       !byte 0
+DrawOrderIndex: !byte 0
+SpriteSlot:     !byte 0
+SortPass:       !byte 0
+SortIndex:      !byte 0
+SortPassEnd:    !byte 0
+SortLeftY:      !byte 0
+SortTemp:       !byte 0
+RenderOrder:    !fill 8, 0
 RowScratch:     !fill 7, 0
 BackBitmapHi:   !byte $e0
 BackBank:       !byte $00

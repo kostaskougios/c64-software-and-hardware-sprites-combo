@@ -38,9 +38,10 @@ for n, block in enumerate(blocks):
     out.append("    !byte 0")
     out.append("")
 
-# Precombine the outer contour and feature contours into 42 scanlines of six
-# bytes. The assembly shifts each scanline to the actor's pixel X alignment,
-# then ORs whole bytes into the hires bitmap instead of plotting each pixel.
+# Precombine opaque actor silhouettes and contour/detail masks into 42 scanlines
+# of six bytes. The assembly shifts each scanline to the actor's pixel X
+# alignment, so it can mask hidden contours and draw visible ones by byte.
+out.append("* = $8000")  # Keep tables outside the bitmap buffers at $6000/$a000.
 for n, block in enumerate(blocks):
     solid = set()
     detail_solid = set()
@@ -60,12 +61,14 @@ for n, block in enumerate(blocks):
                 p = (x + dx, y + dy)
                 if p not in shape and 0 <= p[0] < 48 and 0 <= p[1] < 42:
                     contour.add(p)
-    rows = bytearray(42 * 6)
-    for x, y in contour:
-        rows[y * 6 + x // 8] |= 0x80 >> (x & 7)
-    out.append(f"ContourData{n}:")
-    for i in range(0, len(rows), 16):
-        out.append(asm_bytes(rows[i:i+16]))
-out += ["ContourDataLo:", "    !byte " + ",".join(f"<ContourData{n}" for n in range(4)),
-        "ContourDataHi:", "    !byte " + ",".join(f">ContourData{n}" for n in range(4))]
+    for label, points in (("Silhouette", solid), ("Contour", contour)):
+        rows = bytearray(42 * 6)
+        for x, y in points:
+            rows[y * 6 + x // 8] |= 0x80 >> (x & 7)
+        out.append(f"{label}Data{n}:")
+        for i in range(0, len(rows), 16):
+            out.append(asm_bytes(rows[i:i+16]))
+for label in ("Silhouette", "Contour"):
+    out += [f"{label}DataLo:", "    !byte " + ",".join(f"<{label}Data{n}" for n in range(4)),
+            f"{label}DataHi:", "    !byte " + ",".join(f">{label}Data{n}" for n in range(4))]
 (ROOT / "src/generated_sprites.asm").write_text("\n".join(out) + "\n")

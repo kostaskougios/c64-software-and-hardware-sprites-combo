@@ -6,8 +6,12 @@ around a hires bitmap screen. Each character is made from two layers:
 * a multicolour VIC-II hardware sprite expanded to 2x width and 2x height;
 * a one-pixel black hires bitmap contour drawn around the expanded sprite.
 
-The demo uses one hardware sprite per character and one shared bitmap outline
-shape. It reuses four character designs across the eight sprites. The
+The demo uses one hardware sprite per character and reuses four character
+designs across the eight sprites. Each frame sorts the characters by vertical
+position from back to front. The bitmap renderer removes a farther character's
+contour wherever a nearer character's opaque silhouette covers it, then draws
+the nearer contour. Hardware sprite slots use the same depth order, since lower
+numbered VIC-II sprites have higher priority when sprites overlap. The
 characters bounce inside the visible bitmap area. It renders the
 next hires frame into a hidden VIC-II bank, then switches banks at the bottom
 of the screen. The previous frame stays visible while the next outline is drawn,
@@ -29,18 +33,19 @@ it directly with `x64sc -autostart build/sprite-demo.prg`.
 
 ## Assembly routines
 
-`DrawOutline` takes `BaseX` and `BaseY`, the top-left bitmap coordinate of the
-48x42 expanded character. It draws a precombined 42-row mask of the outer
-contour and fine feature lines. Each row is shifted to the actor's pixel
-alignment and merged into the back-buffer bitmap a byte at a time. The caller
-clears the hidden bitmap before drawing; the colored background uses the
-screen-memory color bytes and remains static.
+`SortActors` produces a stable back-to-front order using each actor's Y
+coordinate. `DrawActors` uses that order to erase previous contour pixels under
+each opaque silhouette before drawing its contour into the hidden bitmap. The
+precombined 42-row masks are shifted to the actor's pixel alignment and merged
+or cleared a byte at a time. Hardware sprite registers are then mapped from the
+same depth order before the bitmap banks swap.
 
 The sprite converter packs four 12x21 multicolour pixels per row into the
 VIC-II's three-byte row format and derives an expanded hires contour from the
 silhouette. Code `1` marks light-grey feature areas; the converter derives
 one-pixel black detail contours around them, while the bitmap contour adds the
-external silhouette. The background converter generates the colored hills
+external silhouette. The converter also generates opaque silhouette masks for
+depth occlusion. These masks live outside the bitmap buffers. The background converter generates the colored hills
 and bitmap cell colors. Edit `data/characters.txt`
 (21 rows of up to 12 characters; `.` transparent, `1` feature area,
 `2` shared color, `3` per-sprite color) and run `make` to regenerate the
