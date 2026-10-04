@@ -27,6 +27,8 @@ MinY = 20
 MaxY = 136
 SourcePtr = $02                 ; unused KERNAL/BASIC zero-page workspace
 Ptr = $04
+ShiftRightPtr = $06
+ShiftLeftPtr = $08
 
 Start:
     sei
@@ -89,8 +91,16 @@ Frame:
     cli
     jmp RenderComplete
 RenderBack:
+    ; The shift lookup pages live under BASIC ROM. Disable BASIC while keeping
+    ; the KERNAL and I/O visible so raster interrupts continue to work.
+    lda $01
+    sta SavedCpuPort
+    and #$fe
+    sta $01
     jsr ClearBackBitmap
     jsr DrawActors
+    lda SavedCpuPort
+    sta $01
 RenderComplete:
     ; Swap only at the bottom border. The visible bitmap remains intact while
     ; the next frame is composed in the other bank.
@@ -231,6 +241,20 @@ DrawActorMaskRows:
     lda BaseX
     and #$07
     sta HorizontalShift
+    beq MaskShiftTablesReady
+    ; Each shift amount occupies its own lookup page.
+    clc
+    adc #>(ShiftRightTable-1)
+    sta ShiftRightPtr+1
+    lda HorizontalShift
+    clc
+    adc #>(ShiftLeftTable-1)
+    sta ShiftLeftPtr+1
+MaskShiftTablesReady:
+    lda #<ShiftRightTable
+    sta ShiftRightPtr
+    lda #<ShiftLeftTable
+    sta ShiftLeftPtr
     lda #$00
     sta MaskRow
 DrawMaskRow:
@@ -244,31 +268,66 @@ LoadMaskByte:
     lda #$00
     sta RowScratch+6
     ldx HorizontalShift
-    beq MaskShifted
-ShiftMaskRow:
-    lda RowScratch
-    lsr
+    bne DoMaskShift
+    jmp MaskShifted
+DoMaskShift:
+    ; The VIC's left-to-right pixel order carries each byte's low bit into
+    ; bit 7 of the next byte when shifted right. Preserve that carry per byte.
+    ldy RowScratch
+    lda (ShiftRightPtr),y
+    sta ShiftOut
+    ldy RowScratch
+    lda (ShiftLeftPtr),y
+    sta ShiftCarry
+    lda ShiftOut
     sta RowScratch
-    lda RowScratch+1
-    ror
+    ldy RowScratch+1
+    lda (ShiftRightPtr),y
+    ora ShiftCarry
+    sta ShiftOut
+    ldy RowScratch+1
+    lda (ShiftLeftPtr),y
+    sta ShiftCarry
+    lda ShiftOut
     sta RowScratch+1
-    lda RowScratch+2
-    ror
+    ldy RowScratch+2
+    lda (ShiftRightPtr),y
+    ora ShiftCarry
+    sta ShiftOut
+    ldy RowScratch+2
+    lda (ShiftLeftPtr),y
+    sta ShiftCarry
+    lda ShiftOut
     sta RowScratch+2
-    lda RowScratch+3
-    ror
+    ldy RowScratch+3
+    lda (ShiftRightPtr),y
+    ora ShiftCarry
+    sta ShiftOut
+    ldy RowScratch+3
+    lda (ShiftLeftPtr),y
+    sta ShiftCarry
+    lda ShiftOut
     sta RowScratch+3
-    lda RowScratch+4
-    ror
+    ldy RowScratch+4
+    lda (ShiftRightPtr),y
+    ora ShiftCarry
+    sta ShiftOut
+    ldy RowScratch+4
+    lda (ShiftLeftPtr),y
+    sta ShiftCarry
+    lda ShiftOut
     sta RowScratch+4
-    lda RowScratch+5
-    ror
+    ldy RowScratch+5
+    lda (ShiftRightPtr),y
+    ora ShiftCarry
+    sta ShiftOut
+    ldy RowScratch+5
+    lda (ShiftLeftPtr),y
+    sta ShiftCarry
+    lda ShiftOut
     sta RowScratch+5
-    lda RowScratch+6
-    ror
+    lda ShiftCarry
     sta RowScratch+6
-    dex
-    bne ShiftMaskRow
 MaskShifted:
     lda BaseY
     clc
@@ -392,8 +451,7 @@ CopyToBank3Column:
 CopyToBank3Done:
     rts
 
-; The background bitmap has no foreground artwork; only actor contours are
-; drawn into it. Clear the hidden bitmap directly instead of copying 8 KB.
+; The hidden bitmap is normally blank; clear it before recompositing actors.
 ClearBackBitmap:
     lda BackBitmapHi
     cmp #$60
@@ -661,6 +719,8 @@ SortLeftY:      !byte 0
 SortTemp:       !byte 0
 RenderOrder:    !fill 8, 0
 RowScratch:     !fill 7, 0
+ShiftCarry:     !byte 0
+ShiftOut:       !byte 0
 BackBitmapHi:   !byte $e0
 BackBank:       !byte $00
 SavedCpuPort:   !byte $37
@@ -672,3 +732,19 @@ SavedCpuPort:   !byte $37
 ; Sprite pages are in VIC bank 1 RAM, outside bitmap and screen memory.
 * = $5000
 !source "src/generated_sprites.asm"
+
+; Seven 256-byte pages per direction make arbitrary 1..7 pixel shifts a pair
+; of table reads per mask byte. These reside under BASIC ROM ($a000-$adff).
+* = $a000
+ShiftRightTable:
+    !for .shift, 1, 7 {
+        !for .value, 0, 255 {
+            !byte (.value >> .shift)
+        }
+    }
+ShiftLeftTable:
+    !for .shift, 1, 7 {
+        !for .value, 0, 255 {
+            !byte ((.value << (8-.shift)) & $ff)
+        }
+    }

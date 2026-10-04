@@ -38,8 +38,10 @@ coordinate. `DrawActors` uses that order to erase previous contour pixels under
 an opaque silhouette only when its 48x42 bounds overlap an earlier actor. The
 precombined 42-row masks are shifted to the actor's pixel alignment and merged
 or cleared a byte at a time; bitmap row addresses stay fixed while the seven
-bytes are accessed by offset. Hardware sprite registers are then mapped from
-the same depth order before the bitmap banks swap.
+bytes are accessed by offset. Two lookup tables under BASIC ROM replace the
+per-bit row-shift loop. Each hidden bitmap is cleared before recompositing to
+remove every trace of the previous frame. Hardware sprite registers are then
+mapped from the same depth order before the bitmap banks swap.
 
 The sprite converter packs four 12x21 multicolour pixels per row into the
 VIC-II's three-byte row format and derives an expanded hires contour from the
