@@ -1,13 +1,14 @@
 # C64 software sprite demo
 
-This project builds a Commodore 64 program that moves four coloured characters
+This project builds a Commodore 64 program that moves eight coloured characters
 around a hires bitmap screen. Each character is made from two layers:
 
 * a multicolour VIC-II hardware sprite expanded to 2x width and 2x height;
 * a one-pixel black hires bitmap contour drawn around the expanded sprite.
 
 The demo uses one hardware sprite per character and one shared bitmap outline
-shape. The characters bounce inside the visible bitmap area. It renders the
+shape. It reuses four character designs across the eight sprites. The
+characters bounce inside the visible bitmap area. It renders the
 next hires frame into a hidden VIC-II bank, then switches banks at the bottom
 of the screen. The previous frame stays visible while the next outline is drawn,
 so the contours do not disappear during rendering. Colored, pixel-art hills
@@ -37,7 +38,7 @@ VIC-II's 8x8 character-cell bitmap layout.
 `PixelY` (0..199), then sets one black pixel. The routines use the shared
 workspace in the assembly and clobber A, X, Y, and `Ptr`. The caller clears or
 restores the back buffer before drawing; the demo copies the static background
-to that buffer before adding the four outlines.
+to that buffer before adding all eight outlines.
 
 The sprite converter packs four 12x21 multicolour pixels per row into the
 VIC-II's three-byte row format and derives an expanded hires contour from the

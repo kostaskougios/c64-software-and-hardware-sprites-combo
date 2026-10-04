@@ -45,8 +45,8 @@ Start:
     sta VIC_MC0                 ; light grey feature fill under hires ink
     lda #$02
     sta VIC_MC1                 ; red
-    lda #$0f
-    sta VIC_SPR_PRIORITY        ; hires foreground detail draws over sprites 0-3
+    lda #$ff
+    sta VIC_SPR_PRIORITY        ; hires foreground detail draws over all eight sprites
 
     ; Hires bitmap mode, 320x200. Screen RAM $4400, bitmap $6000.
     lda #$3b
@@ -120,7 +120,7 @@ DrawActor:
     ldx ActorIndex
     inx
     stx ActorIndex
-    cpx #$04
+    cpx #$08
     bne DrawActor
     rts
 
@@ -142,6 +142,9 @@ DrawOutline:
     sta PointsLeft+1
     jsr DrawPointList
     ldx ActorIndex
+    txa
+    and #$03                    ; four character drawings are shared by eight actors
+    tax
     lda DetailDataLo,x
     sta PointPtr
     lda DetailDataHi,x
@@ -277,7 +280,7 @@ CopyToBank3Done:
 
 InitSprites:
     ; Multicolour + 2x width and height. Install patterns in both VIC banks.
-    lda #$0f
+    lda #$ff
     sta VIC_SPR_ENABLE
     sta VIC_SPR_MCOLOR
     sta VIC_SPR_XEXP
@@ -310,7 +313,7 @@ PositionAllLoop:
     jsr PositionSprite
     ldx ActorIndex
     inx
-    cpx #$04
+    cpx #$08
     bne PositionAllLoop
     rts
 
@@ -328,7 +331,7 @@ PositionSprite:
     clc
     adc #$32
     sta $d001,y
-    ; Rebuild the X high-bit register for all four live sprites.
+    ; Rebuild the X high-bit register for all eight live sprites.
     lda VIC_SPR_XMSB
     and ClearXmsb,x
     sta VIC_SPR_XMSB
@@ -384,7 +387,7 @@ CheckBottom:
     sta ActorY,x
 MoveNext:
     inx
-    cpx #$04
+    cpx #$08
     bne MoveLoop
     rts
 
@@ -409,15 +412,15 @@ RowHi:
         !byte >((.y & $f8)*40 + (.y & $07))
     }
 
-SpritePointers:     !byte $40,$41,$42,$43,$00,$00,$00,$00
-SpritePointersBack: !byte $00,$01,$02,$03,$00,$00,$00,$00
-SpriteColors:   !byte $01,$05,$0d,$0a,$00,$00,$00,$00
-ClearXmsb:      !byte $fe,$fd,$fb,$f7
-SetXmsb:        !byte $01,$02,$04,$08
-ActorX:         !byte 24,118,194,72
-ActorY:         !byte 25,76,124,144
-VelX:           !byte 2,$fe,2,$fe
-VelY:           !byte 2,2,$fe,$fe
+SpritePointers:     !byte $40,$41,$42,$43,$40,$41,$42,$43
+SpritePointersBack: !byte $00,$01,$02,$03,$00,$01,$02,$03
+SpriteColors:   !byte $01,$05,$0d,$0a,$03,$07,$0e,$08
+ClearXmsb:      !byte $fe,$fd,$fb,$f7,$ef,$df,$bf,$7f
+SetXmsb:        !byte $01,$02,$04,$08,$10,$20,$40,$80
+ActorX:         !byte 18,88,158,228,45,115,185,250
+ActorY:         !byte 25,32,25,35,94,100,95,88
+VelX:           !byte 2,$fe,1,$ff,$fe,2,$ff,1
+VelY:           !byte 2,1,$fe,$ff,$ff,2,1,$fe
 ActorIndex:     !byte 0
 BaseX:          !byte 0
 BaseY:          !byte 0
