@@ -35,10 +35,11 @@ it directly with `x64sc -autostart build/sprite-demo.prg`.
 
 `SortActors` produces a stable back-to-front order using each actor's Y
 coordinate. `DrawActors` uses that order to erase previous contour pixels under
-each opaque silhouette before drawing its contour into the hidden bitmap. The
+an opaque silhouette only when its 48x42 bounds overlap an earlier actor. The
 precombined 42-row masks are shifted to the actor's pixel alignment and merged
-or cleared a byte at a time. Hardware sprite registers are then mapped from the
-same depth order before the bitmap banks swap.
+or cleared a byte at a time; bitmap row addresses stay fixed while the seven
+bytes are accessed by offset. Hardware sprite registers are then mapped from
+the same depth order before the bitmap banks swap.
 
 The sprite converter packs four 12x21 multicolour pixels per row into the
 VIC-II's three-byte row format and derives an expanded hires contour from the

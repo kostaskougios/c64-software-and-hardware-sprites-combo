@@ -121,12 +121,81 @@ DrawActor:
     sta BaseX
     lda ActorY,x
     sta BaseY
+    jsr CheckActorOverlap
+    lda OverlapFlag
+    beq DrawActorOutline
     jsr ClearBitmapUnderActor
+DrawActorOutline:
     jsr DrawOutline
     inc DrawOrderIndex
     lda DrawOrderIndex
     cmp #$08
     bne DrawActor
+    rts
+
+; A silhouette only needs to erase contours when an earlier (farther) actor's
+; 48x42 bounding box intersects it. Most frames have few such intersections.
+CheckActorOverlap:
+    lda #$00
+    sta OverlapFlag
+    lda DrawOrderIndex
+    beq ActorOverlapDone
+    ldx ActorIndex
+    lda ActorX,x
+    sta CurrentActorX
+    lda ActorY,x
+    sta CurrentActorY
+    lda #$00
+    sta OverlapScanIndex
+ActorOverlapLoop:
+    ldx OverlapScanIndex
+    lda RenderOrder,x
+    tax
+    lda ActorX,x
+    sta OtherActorX
+    lda ActorY,x
+    sta OtherActorY
+    ; Horizontal interval overlap: absolute X distance must be less than 48.
+    lda CurrentActorX
+    cmp OtherActorX
+    bcc ActorOverlapXReverse
+    sec
+    sbc OtherActorX
+    cmp #$30
+    bcs ActorOverlapNext
+    jmp ActorOverlapCheckY
+ActorOverlapXReverse:
+    lda OtherActorX
+    sec
+    sbc CurrentActorX
+    cmp #$30
+    bcs ActorOverlapNext
+ActorOverlapCheckY:
+    ; Vertical interval overlap: absolute Y distance must be less than 42.
+    lda CurrentActorY
+    cmp OtherActorY
+    bcc ActorOverlapYReverse
+    sec
+    sbc OtherActorY
+    cmp #$2a
+    bcs ActorOverlapNext
+    jmp ActorOverlapFound
+ActorOverlapYReverse:
+    lda OtherActorY
+    sec
+    sbc CurrentActorY
+    cmp #$2a
+    bcs ActorOverlapNext
+ActorOverlapFound:
+    lda #$01
+    sta OverlapFlag
+    rts
+ActorOverlapNext:
+    inc OverlapScanIndex
+    lda OverlapScanIndex
+    cmp DrawOrderIndex
+    bne ActorOverlapLoop
+ActorOverlapDone:
     rts
 
 ; Clear a farther actor's outline under this actor's opaque silhouette, then
@@ -219,33 +288,46 @@ MaskShifted:
     bcc MaskRowAddressReady
     inc Ptr+1
 MaskRowAddressReady:
+    ; Screen bytes in a bitmap row are eight bytes apart. Keep the row base
+    ; fixed and use Y as the byte offset instead of rebuilding Ptr seven times.
+    lda MaskMode
+    bne EraseMaskRow
     ldx #$00
-WriteMaskByte:
+    ldy #$00
+DrawMaskByte:
     lda RowScratch,x
     beq SkipMaskByte
-    ldy #$00
-    lda MaskMode
-    bne EraseMaskByte
-    lda RowScratch,x
     ora (Ptr),y
     sta (Ptr),y
-    jmp SkipMaskByte
+SkipMaskByte:
+    tya
+    clc
+    adc #$08
+    tay
+    inx
+    cpx #$07
+    bne DrawMaskByte
+    jmp MaskBytesDone
+
+EraseMaskRow:
+    ldx #$00
+    ldy #$00
 EraseMaskByte:
+    lda RowScratch,x
+    beq SkipEraseMaskByte
     lda RowScratch,x
     eor #$ff
     and (Ptr),y
     sta (Ptr),y
-SkipMaskByte:
+SkipEraseMaskByte:
+    tya
     clc
-    lda Ptr
     adc #$08
-    sta Ptr
-    bcc MaskColumnReady
-    inc Ptr+1
-MaskColumnReady:
+    tay
     inx
     cpx #$07
-    bne WriteMaskByte
+    bne EraseMaskByte
+MaskBytesDone:
     clc
     lda SourcePtr
     adc #$06
@@ -556,6 +638,12 @@ ClearXmsb:      !byte $fe,$fd,$fb,$f7,$ef,$df,$bf,$7f
 SetXmsb:        !byte $01,$02,$04,$08,$10,$20,$40,$80
 ActorX:         !byte 18,88,158,228,45,115,185,250
 ActorY:         !byte 25,32,25,35,94,100,95,88
+CurrentActorX:  !byte 0
+CurrentActorY:  !byte 0
+OtherActorX:    !byte 0
+OtherActorY:    !byte 0
+OverlapFlag:    !byte 0
+OverlapScanIndex: !byte 0
 VelX:           !byte 2,$fe,1,$ff,$fe,2,$ff,1
 VelY:           !byte 2,1,$fe,$ff,$ff,2,1,$fe
 ActorIndex:     !byte 0
