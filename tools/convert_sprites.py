@@ -39,7 +39,7 @@ for n, block in enumerate(blocks):
     out.append("")
 
 # A bitmap pixel is one C64 hires pixel. The colour sprite is expanded 4x2,
-# so outline the resulting 48x42 silhouette with one-pixel white pixels.
+# so outline the resulting 48x42 silhouette with one-pixel black pixels.
 solid = set()
 for y, row in enumerate(blocks[0]):
     row = row.ljust(12, ".")

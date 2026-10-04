@@ -11,8 +11,9 @@ def set_pixel(x: int, y: int) -> None:
     offset = (y // 8) * 320 + (x // 8) * 8 + (y & 7)
     bitmap[offset] |= 0x80 >> (x & 7)
 
-# Star points and a small crescent made from hires pixels. These are white
-# foreground bits over the colored per-cell sky behind them.
+# Star points and a small crescent made from black hires pixels over the
+# colored per-cell sky behind them. The outline shares the hires foreground
+# color, so the background marks use black too.
 stars = [
     (15, 17), (42, 52), (73, 25), (96, 68), (124, 37), (153, 19),
     (178, 63), (204, 29), (229, 78), (251, 48), (289, 23), (306, 67),
@@ -26,15 +27,7 @@ for y in range(25, 46):
         if 76 <= dx * dx + dy * dy <= 100:
             set_pixel(x, y)
 
-# White snow caps on distant peaks add a few clear landmarks.
-for cx, cy, radius in ((38, 112, 7), (154, 104, 10), (272, 115, 8)):
-    for dy in range(radius + 1):
-        for dx in range(-dy, dy + 1):
-            x, y = cx + dx, cy + dy
-            if 0 <= x < W and 0 <= y < H:
-                set_pixel(x, y)
-
-# Hires bitmap screen bytes: high nibble is the white outline/star ink;
+# Hires bitmap screen bytes: high nibble is the black outline/star ink;
 # low nibble is a per-cell background color.
 colors = bytearray(1024)
 for cy in range(25):
@@ -54,7 +47,7 @@ for cy in range(25):
         river_x = 24 + (cy - 18) * 2
         if cy >= 17 and abs(cx - river_x) <= 1:
             bg = 6
-        colors[cy * 40 + cx] = (15 << 4) | bg
+        colors[cy * 40 + cx] = bg
 
 def asm_bytes(values):
     return "    !byte " + ",".join(f"${b:02x}" for b in values)

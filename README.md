@@ -4,7 +4,7 @@ This project builds a Commodore 64 program that moves four coloured characters
 around a hires bitmap screen. Each character is made from two layers:
 
 * a multicolour VIC-II hardware sprite expanded to 2x width and 2x height;
-* a one-pixel hires bitmap contour drawn around the expanded sprite.
+* a one-pixel black hires bitmap contour drawn around the expanded sprite.
 
 The demo uses one hardware sprite per character and one shared bitmap outline
 shape. The characters bounce inside the visible bitmap area. It renders the
@@ -29,10 +29,10 @@ it directly with `x64sc -autostart build/sprite-demo.prg`.
 ## Assembly routines
 
 `DrawOutline` takes `BaseX` and `BaseY`, the top-left bitmap coordinate of the
-48x42 expanded character. It plots a white contour into the back-buffer hires
+48x42 expanded character. It plots a black contour into the back-buffer hires
 bitmap. `PlotPixel` accounts for the VIC-II's 8x8 character-cell bitmap layout.
 `PlotPixel` takes `PixelX` as a low byte plus `PixelXHi` (0 or 1), and
-`PixelY` (0..199), then sets one white pixel. The routines use the shared
+`PixelY` (0..199), then sets one black pixel. The routines use the shared
 workspace in the assembly and clobber A, X, Y, and `Ptr`. The caller clears or
 restores the back buffer before drawing; the demo copies the static background
 to that buffer before adding the four outlines.
