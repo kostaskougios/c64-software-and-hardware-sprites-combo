@@ -38,10 +38,12 @@ for n, block in enumerate(blocks):
     out.append("    !byte 0")
     out.append("")
 
-# Precombine opaque actor silhouettes and contour/detail masks into 42 scanlines
-# of six bytes. The assembly shifts each scanline to the actor's pixel X
-# alignment, so it can mask hidden contours and draw visible ones by byte.
+# Precompute horizontally shifted masks for the two reachable alignments (0
+# and 4 pixels). Each
+# nonempty row stores its row number, a seven-bit byte-position mask, then only
+# the nonzero byte values in position order.
 out.append("* = $8000")  # Keep tables outside the bitmap buffers at $6000/$a000.
+mask_tables = {"Silhouette": [], "Contour": []}
 for n, block in enumerate(blocks):
     solid = set()
     detail_solid = set()
@@ -62,13 +64,24 @@ for n, block in enumerate(blocks):
                 if p not in shape and 0 <= p[0] < 48 and 0 <= p[1] < 42:
                     contour.add(p)
     for label, points in (("Silhouette", solid), ("Contour", contour)):
-        rows = bytearray(42 * 6)
-        for x, y in points:
-            rows[y * 6 + x // 8] |= 0x80 >> (x & 7)
-        out.append(f"{label}Data{n}:")
-        for i in range(0, len(rows), 16):
-            out.append(asm_bytes(rows[i:i+16]))
-for label in ("Silhouette", "Contour"):
-    out += [f"{label}DataLo:", "    !byte " + ",".join(f"<{label}Data{n}" for n in range(4)),
-            f"{label}DataHi:", "    !byte " + ",".join(f">{label}Data{n}" for n in range(4))]
+        for shift in (0, 4):
+            rows = [bytearray(7) for _ in range(42)]
+            for x, y in points:
+                px = x + shift
+                rows[y][px // 8] |= 0x80 >> (px & 7)
+            row_records = []
+            for y, row in enumerate(rows):
+                byte_mask = sum(1 << byte_index for byte_index, value in enumerate(row) if value)
+                if byte_mask:
+                    row_records.append((y, byte_mask, [value for value in row if value]))
+            name = f"{label}Sparse{n}_{shift}"
+            out.append(f"{name}:")
+            for y, byte_mask, values in row_records:
+                out.append(asm_bytes([y, byte_mask] + values))
+            mask_tables[label].append((name, len(row_records)))
+
+for label, entries in mask_tables.items():
+    out += [f"{label}SparseLo:", "    !byte " + ",".join(f"<{name}" for name, _ in entries),
+            f"{label}SparseHi:", "    !byte " + ",".join(f">{name}" for name, _ in entries),
+            f"{label}SparseRows:", "    !byte " + ",".join(f"${count:02x}" for _, count in entries)]
 (ROOT / "src/generated_sprites.asm").write_text("\n".join(out) + "\n")

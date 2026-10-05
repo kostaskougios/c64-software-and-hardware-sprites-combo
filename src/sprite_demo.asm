@@ -22,13 +22,11 @@ VIC_SPR0_COLOR = $d027
 SCREEN         = $4400
 SCREEN_BACK    = $c400
 MinX = 16
-MaxX = 255
+MaxX = 252
 MinY = 20
 MaxY = 136
 SourcePtr = $02                 ; unused KERNAL/BASIC zero-page workspace
 Ptr = $04
-ShiftRightPtr = $06
-ShiftLeftPtr = $08
 
 Start:
     sei
@@ -48,7 +46,7 @@ Start:
     lda #$02
     sta VIC_MC1                 ; red
     lda #$ff
-    sta VIC_SPR_PRIORITY        ; hires foreground detail draws over all eight sprites
+    sta VIC_SPR_PRIORITY        ; bitmap contours draw over sprites after ink cleanup
 
     ; Hires bitmap mode, 320x200. Screen RAM $4400, bitmap $6000.
     lda #$3b
@@ -91,8 +89,8 @@ Frame:
     cli
     jmp RenderComplete
 RenderBack:
-    ; The shift lookup pages live under BASIC ROM. Disable BASIC while keeping
-    ; the KERNAL and I/O visible so raster interrupts continue to work.
+    ; Keep BASIC out while drawing the back buffer in bank 1. This also leaves
+    ; the generated lookup tables at $8000 visible to the CPU.
     lda $01
     sta SavedCpuPort
     and #$fe
@@ -131,207 +129,97 @@ DrawActor:
     sta BaseX
     lda ActorY,x
     sta BaseY
-    jsr CheckActorOverlap
-    lda OverlapFlag
-    beq DrawActorOutline
-    jsr ClearBitmapUnderActor
-DrawActorOutline:
     jsr DrawOutline
     inc DrawOrderIndex
     lda DrawOrderIndex
     cmp #$08
     bne DrawActor
-    rts
-
-; A silhouette only needs to erase contours when an earlier (farther) actor's
-; 48x42 bounding box intersects it. Most frames have few such intersections.
-CheckActorOverlap:
-    lda #$00
-    sta OverlapFlag
-    lda DrawOrderIndex
-    beq ActorOverlapDone
-    ldx ActorIndex
-    lda ActorX,x
-    sta CurrentActorX
-    lda ActorY,x
-    sta CurrentActorY
-    lda #$00
-    sta OverlapScanIndex
-ActorOverlapLoop:
-    ldx OverlapScanIndex
+    ; Clear background and contour ink under every opaque sprite only after
+    ; all contours are drawn. This keeps background details off the characters
+    ; without hiding the contour around their silhouettes.
+    ldx #$00
+    stx DrawOrderIndex
+ClearActorInterior:
+    ldx DrawOrderIndex
     lda RenderOrder,x
+    sta ActorIndex
     tax
     lda ActorX,x
-    sta OtherActorX
+    sta BaseX
     lda ActorY,x
-    sta OtherActorY
-    ; Horizontal interval overlap: absolute X distance must be less than 48.
-    lda CurrentActorX
-    cmp OtherActorX
-    bcc ActorOverlapXReverse
-    sec
-    sbc OtherActorX
-    cmp #$30
-    bcs ActorOverlapNext
-    jmp ActorOverlapCheckY
-ActorOverlapXReverse:
-    lda OtherActorX
-    sec
-    sbc CurrentActorX
-    cmp #$30
-    bcs ActorOverlapNext
-ActorOverlapCheckY:
-    ; Vertical interval overlap: absolute Y distance must be less than 42.
-    lda CurrentActorY
-    cmp OtherActorY
-    bcc ActorOverlapYReverse
-    sec
-    sbc OtherActorY
-    cmp #$2a
-    bcs ActorOverlapNext
-    jmp ActorOverlapFound
-ActorOverlapYReverse:
-    lda OtherActorY
-    sec
-    sbc CurrentActorY
-    cmp #$2a
-    bcs ActorOverlapNext
-ActorOverlapFound:
-    lda #$01
-    sta OverlapFlag
-    rts
-ActorOverlapNext:
-    inc OverlapScanIndex
-    lda OverlapScanIndex
-    cmp DrawOrderIndex
-    bne ActorOverlapLoop
-ActorOverlapDone:
+    sta BaseY
+    jsr ClearBitmapUnderActor
+    inc DrawOrderIndex
+    lda DrawOrderIndex
+    cmp #$08
+    bne ClearActorInterior
     rts
 
-; Clear a farther actor's outline under this actor's opaque silhouette, then
-; draw this actor's own contour. Transparent parts leave farther contours intact.
+; Clear bitmap ink under this actor's opaque pixels. Transparent parts keep
+; the background visible.
 ClearBitmapUnderActor:
     lda #$01
     sta MaskMode
-    ldx ActorIndex
-    txa
-    and #$03
-    tax
-    lda SilhouetteDataLo,x
-    sta SourcePtr
-    lda SilhouetteDataHi,x
-    sta SourcePtr+1
-    jmp DrawActorMaskRows
+    jmp SelectMaskRecords
 
 DrawOutline:
     lda #$00
     sta MaskMode
+SelectMaskRecords:
+    lda BaseX
+    and #$04
+    lsr
+    lsr
+    sta HorizontalShift
     ldx ActorIndex
     txa
     and #$03
+    asl
+    clc
+    adc HorizontalShift
     tax
-    lda ContourDataLo,x
+    lda MaskMode
+    bne SelectSilhouetteRecords
+    lda ContourSparseLo,x
     sta SourcePtr
-    lda ContourDataHi,x
+    lda ContourSparseHi,x
     sta SourcePtr+1
-    jmp DrawActorMaskRows
+    lda ContourSparseRows,x
+    sta MaskRowCount
+    jmp DrawSparseMask
+SelectSilhouetteRecords:
+    lda SilhouetteSparseLo,x
+    sta SourcePtr
+    lda SilhouetteSparseHi,x
+    sta SourcePtr+1
+    lda SilhouetteSparseRows,x
+    sta MaskRowCount
 
-; Draw or erase a precombined 48x42 mask, shifted for arbitrary actor X.
-DrawActorMaskRows:
-    lda BaseX
-    and #$07
-    sta HorizontalShift
-    beq MaskShiftTablesReady
-    ; Each shift amount occupies its own lookup page.
-    clc
-    adc #>(ShiftRightTable-1)
-    sta ShiftRightPtr+1
-    lda HorizontalShift
-    clc
-    adc #>(ShiftLeftTable-1)
-    sta ShiftLeftPtr+1
-MaskShiftTablesReady:
-    lda #<ShiftRightTable
-    sta ShiftRightPtr
-    lda #<ShiftLeftTable
-    sta ShiftLeftPtr
-    lda #$00
-    sta MaskRow
-DrawMaskRow:
+; Each sparse row stores a row number, byte-position bitset, and its nonzero
+; mask bytes. This avoids loading or shifting empty mask bytes at runtime.
+DrawSparseMask:
+DrawSparseMaskRow:
+    lda MaskRowCount
+    bne SparseMaskHasRows
+    rts
+SparseMaskHasRows:
     ldy #$00
-LoadMaskByte:
     lda (SourcePtr),y
-    sta RowScratch,y
+    sta MaskEntryRow
     iny
-    cpy #$06
-    bne LoadMaskByte
-    lda #$00
-    sta RowScratch+6
-    ldx HorizontalShift
-    bne DoMaskShift
-    jmp MaskShifted
-DoMaskShift:
-    ; The VIC's left-to-right pixel order carries each byte's low bit into
-    ; bit 7 of the next byte when shifted right. Preserve that carry per byte.
-    ldy RowScratch
-    lda (ShiftRightPtr),y
-    sta ShiftOut
-    ldy RowScratch
-    lda (ShiftLeftPtr),y
-    sta ShiftCarry
-    lda ShiftOut
-    sta RowScratch
-    ldy RowScratch+1
-    lda (ShiftRightPtr),y
-    ora ShiftCarry
-    sta ShiftOut
-    ldy RowScratch+1
-    lda (ShiftLeftPtr),y
-    sta ShiftCarry
-    lda ShiftOut
-    sta RowScratch+1
-    ldy RowScratch+2
-    lda (ShiftRightPtr),y
-    ora ShiftCarry
-    sta ShiftOut
-    ldy RowScratch+2
-    lda (ShiftLeftPtr),y
-    sta ShiftCarry
-    lda ShiftOut
-    sta RowScratch+2
-    ldy RowScratch+3
-    lda (ShiftRightPtr),y
-    ora ShiftCarry
-    sta ShiftOut
-    ldy RowScratch+3
-    lda (ShiftLeftPtr),y
-    sta ShiftCarry
-    lda ShiftOut
-    sta RowScratch+3
-    ldy RowScratch+4
-    lda (ShiftRightPtr),y
-    ora ShiftCarry
-    sta ShiftOut
-    ldy RowScratch+4
-    lda (ShiftLeftPtr),y
-    sta ShiftCarry
-    lda ShiftOut
-    sta RowScratch+4
-    ldy RowScratch+5
-    lda (ShiftRightPtr),y
-    ora ShiftCarry
-    sta ShiftOut
-    ldy RowScratch+5
-    lda (ShiftLeftPtr),y
-    sta ShiftCarry
-    lda ShiftOut
-    sta RowScratch+5
-    lda ShiftCarry
-    sta RowScratch+6
-MaskShifted:
-    lda BaseY
+    lda (SourcePtr),y
+    sta MaskByteMask
     clc
-    adc MaskRow
+    lda SourcePtr
+    adc #$02
+    sta SourcePtr
+    bcc SparseRowDataReady
+    inc SourcePtr+1
+SparseRowDataReady:
+    ldy MaskEntryRow
+    tya
+    clc
+    adc BaseY
     tay
     lda RowLo,y
     sta Ptr
@@ -347,60 +235,49 @@ MaskShifted:
     bcc MaskRowAddressReady
     inc Ptr+1
 MaskRowAddressReady:
-    ; Screen bytes in a bitmap row are eight bytes apart. Keep the row base
-    ; fixed and use Y as the byte offset instead of rebuilding Ptr seven times.
-    lda MaskMode
-    bne EraseMaskRow
-    ldx #$00
+    lda #$00
+    sta MaskByteIndex
+    lda #$01
+    sta MaskEntryBit
+DrawSparseMaskByte:
+    lda MaskByteMask
+    and MaskEntryBit
+    beq SkipSparseMaskByte
     ldy #$00
-DrawMaskByte:
-    lda RowScratch,x
-    beq SkipMaskByte
+    lda (SourcePtr),y
+    sta MaskEntryValue
+    ldx MaskByteIndex
+    txa
+    asl
+    asl
+    asl
+    tay
+    lda MaskMode
+    bne EraseSparseByte
+    lda MaskEntryValue
     ora (Ptr),y
     sta (Ptr),y
-SkipMaskByte:
-    tya
-    clc
-    adc #$08
-    tay
-    inx
-    cpx #$07
-    bne DrawMaskByte
-    jmp MaskBytesDone
-
-EraseMaskRow:
-    ldx #$00
-    ldy #$00
-EraseMaskByte:
-    lda RowScratch,x
-    beq SkipEraseMaskByte
-    lda RowScratch,x
+    jmp AdvanceSparseValue
+EraseSparseByte:
+    lda MaskEntryValue
     eor #$ff
     and (Ptr),y
     sta (Ptr),y
-SkipEraseMaskByte:
-    tya
-    clc
-    adc #$08
-    tay
-    inx
-    cpx #$07
-    bne EraseMaskByte
-MaskBytesDone:
+AdvanceSparseValue:
     clc
     lda SourcePtr
-    adc #$06
+    adc #$01
     sta SourcePtr
-    bcc MaskSourceReady
+    bcc SkipSparseMaskByte
     inc SourcePtr+1
-MaskSourceReady:
-    inc MaskRow
-    lda MaskRow
-    cmp #$2a
-    beq DrawMaskDone
-    jmp DrawMaskRow
-DrawMaskDone:
-    rts
+SkipSparseMaskByte:
+    asl MaskEntryBit
+    inc MaskByteIndex
+    lda MaskByteIndex
+    cmp #$07
+    bne DrawSparseMaskByte
+    dec MaskRowCount
+    jmp DrawSparseMaskRow
 
 InitScreenColors:
     ldx #$00
@@ -451,34 +328,9 @@ CopyToBank3Column:
 CopyToBank3Done:
     rts
 
-; The hidden bitmap is normally blank; clear it before recompositing actors.
+; Restore the static scene before recompositing actor pixels.
 ClearBackBitmap:
-    lda BackBitmapHi
-    cmp #$60
-    beq ClearToBank1
-    lda #$00
-    ldx #$00
-ClearToBank3Column:
-    !for .page, $e0, $ff {
-        sta .page * $100,x
-    }
-    inx
-    beq ClearToBank3Done
-    jmp ClearToBank3Column
-ClearToBank3Done:
-    rts
-ClearToBank1:
-    lda #$00
-    ldx #$00
-ClearToBank1Column:
-    !for .page, $60, $7f {
-        sta .page * $100,x
-    }
-    inx
-    beq ClearToBank1Done
-    jmp ClearToBank1Column
-ClearToBank1Done:
-    rts
+    jmp CopyBackgroundToBack
 
 InitSprites:
     ; Multicolour + 2x width and height. Install patterns in both VIC banks.
@@ -624,6 +476,8 @@ SortNoSwap:
     rts
 
 MoveActors:
+    ; X positions and velocities stay on four-pixel boundaries, keeping mask
+    ; alignment limited to BaseX bit 2 (the generated 0- and 4-pixel variants).
     ldx #$00
 MoveLoop:
     lda ActorX,x
@@ -632,7 +486,7 @@ MoveLoop:
     sta ActorX,x
     cmp #MinX
     bcs CheckRight
-    lda #$01
+    lda #$04
     sta VelX,x
     lda #MinX
     sta ActorX,x
@@ -640,7 +494,7 @@ CheckRight:
     lda ActorX,x
     cmp #MaxX
     bcc MoveY
-    lda #$ff
+    lda #$fc
     sta VelX,x
     lda #MaxX
     sta ActorX,x
@@ -694,22 +548,21 @@ SpritePointersBack: !byte $00,$01,$02,$03,$00,$01,$02,$03
 SpriteColors:   !byte $01,$05,$0d,$0a,$03,$07,$0e,$08
 ClearXmsb:      !byte $fe,$fd,$fb,$f7,$ef,$df,$bf,$7f
 SetXmsb:        !byte $01,$02,$04,$08,$10,$20,$40,$80
-ActorX:         !byte 18,88,158,228,45,115,185,250
+ActorX:         !byte 20,88,160,228,44,116,184,252
 ActorY:         !byte 25,32,25,35,94,100,95,88
-CurrentActorX:  !byte 0
-CurrentActorY:  !byte 0
-OtherActorX:    !byte 0
-OtherActorY:    !byte 0
-OverlapFlag:    !byte 0
-OverlapScanIndex: !byte 0
-VelX:           !byte 2,$fe,1,$ff,$fe,2,$ff,1
+VelX:           !byte 4,$fc,4,$fc,$fc,4,$fc,4
 VelY:           !byte 2,1,$fe,$ff,$ff,2,1,$fe
 ActorIndex:     !byte 0
 BaseX:          !byte 0
 BaseY:          !byte 0
 HorizontalShift: !byte 0
-MaskRow:        !byte 0
 MaskMode:       !byte 0
+MaskRowCount:   !byte 0
+MaskEntryRow:   !byte 0
+MaskByteMask:   !byte 0
+MaskByteIndex:  !byte 0
+MaskEntryBit:   !byte 0
+MaskEntryValue: !byte 0
 DrawOrderIndex: !byte 0
 SpriteSlot:     !byte 0
 SortPass:       !byte 0
@@ -718,9 +571,6 @@ SortPassEnd:    !byte 0
 SortLeftY:      !byte 0
 SortTemp:       !byte 0
 RenderOrder:    !fill 8, 0
-RowScratch:     !fill 7, 0
-ShiftCarry:     !byte 0
-ShiftOut:       !byte 0
 BackBitmapHi:   !byte $e0
 BackBank:       !byte $00
 SavedCpuPort:   !byte $37
@@ -732,19 +582,3 @@ SavedCpuPort:   !byte $37
 ; Sprite pages are in VIC bank 1 RAM, outside bitmap and screen memory.
 * = $5000
 !source "src/generated_sprites.asm"
-
-; Seven 256-byte pages per direction make arbitrary 1..7 pixel shifts a pair
-; of table reads per mask byte. These reside under BASIC ROM ($a000-$adff).
-* = $a000
-ShiftRightTable:
-    !for .shift, 1, 7 {
-        !for .value, 0, 255 {
-            !byte (.value >> .shift)
-        }
-    }
-ShiftLeftTable:
-    !for .shift, 1, 7 {
-        !for .value, 0, 255 {
-            !byte ((.value << (8-.shift)) & $ff)
-        }
-    }

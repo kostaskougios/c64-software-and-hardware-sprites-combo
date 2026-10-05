@@ -1,41 +1,141 @@
 #!/usr/bin/env python3
-"""Generate a hires C64 sky-and-hills background plus per-cell colors."""
-from math import sin
+"""Generate a hires dystopian neighborhood with colored cells and black ink."""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 bitmap = bytearray(8192)
-
-# The bitmap foreground is reserved for actor contours and internal detail.
-# The low nibble supplies the colored sky and hills behind transparent sprites.
 colors = bytearray(1024)
+
+
+def pixel(x, y):
+    """Set a black hires pixel. Zero bits reveal the cell's background color."""
+    if 0 <= x < 320 and 0 <= y < 200:
+        # Hires bitmap cells are 8 bytes wide in memory: the eight scanlines
+        # for one character cell are adjacent, not the pixels across a row.
+        address = (y & 7) + (y >> 3) * 320 + (x >> 3) * 8
+        bitmap[address] |= 0x80 >> (x & 7)
+
+
+def line(x0, y0, x1, y1):
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx - dy
+    while True:
+        pixel(x0, y0)
+        if x0 == x1 and y0 == y1:
+            break
+        twice = 2 * err
+        if twice > -dy:
+            err -= dy
+            x0 += sx
+        if twice < dx:
+            err += dx
+            y0 += sy
+
+
+def outline(x, y, width, height):
+    line(x, y, x + width - 1, y)
+    line(x, y + height - 1, x + width - 1, y + height - 1)
+    line(x, y, x, y + height - 1)
+    line(x + width - 1, y, x + width - 1, y + height - 1)
+
+
+# Low-resolution cell colors create a bruised evening sky, concrete towers,
+# and a dim street. The high screen-color nibble remains zero: bitmap 1-bits
+# are black, while 0-bits reveal this single color for each 8x8 cell.
+buildings = [
+    (0, 70, 54, 111, 11),
+    (48, 58, 51, 123, 12),
+    (96, 78, 46, 103, 8),
+    (139, 48, 64, 133, 11),
+    (198, 67, 48, 114, 12),
+    (242, 54, 43, 127, 8),
+    (279, 75, 41, 106, 11),
+]
 for cy in range(25):
-    y = cy * 8 + 4
     for cx in range(40):
-        far_hill = 119 + int(9 * sin(cx * 0.31))
-        near_hill = 143 + int(11 * sin(cx * 0.21 + 1.0))
-        if y < far_hill:
-            bg = 6 if cy < 9 else 4
-        elif y < near_hill:
-            bg = 11 if (cx + cy) % 5 else 12
-        elif y < 168:
-            bg = 5 if (cx // 5 + cy) % 4 else 13
-        else:
-            bg = 5 if cy % 2 else 13
-        # A winding dark river through the valley.
-        river_x = 24 + (cy - 18) * 2
-        if cy >= 17 and abs(cx - river_x) <= 1:
-            bg = 6
-        colors[cy * 40 + cx] = bg
+        x, y = cx * 8 + 4, cy * 8 + 4
+        color = 6 if cy < 5 else (14 if cy < 9 else 6)
+        if cy >= 9:
+            color = 5 if cy < 18 else (8 if cy < 21 else (11 if cy % 2 else 12))
+        for bx, by, bw, bh, facade in buildings:
+            if bx <= x < bx + bw and by <= y < by + bh:
+                color = facade
+                # Muted cell-by-cell banding suggests stained concrete.
+                if ((cx * 3 + cy * 5) % 11) == 0:
+                    color = 12 if facade == 11 else (11 if facade == 12 else 9)
+                break
+        colors[cy * 40 + cx] = color
+
+# The skyline is assembled from black structural lines: roof edges, corners,
+# floors, broken windows, pipes, antennas, and hanging cables.
+for i, (x, y, w, h, _) in enumerate(buildings):
+    outline(x, y, w, h)
+    # Uneven roof parapets and rooftop machinery.
+    line(x + 4, y, x + 4, y - 5 - (i % 3) * 2)
+    line(x + 4, y - 5 - (i % 3) * 2, x + 12, y - 5 - (i % 3) * 2)
+    line(x + 12, y - 5 - (i % 3) * 2, x + 12, y)
+    line(x + w - 13, y, x + w - 13, y - 8)
+    line(x + w - 16, y - 8, x + w - 10, y - 8)
+    # Floor slabs and deliberately interrupted facade seams.
+    floor = y + 17
+    while floor < y + h - 4:
+        line(x + 2, floor, x + w // 2 - 4, floor)
+        line(x + w // 2 + 3, floor, x + w - 2, floor)
+        floor += 19
+    # Recessed windows. The colored cell beneath remains visible as glass.
+    for wy in range(y + 8, y + h - 9, 15):
+        for wx in range(x + 7, x + w - 8, 13):
+            width = 5 if (wx + wy) % 3 else 6
+            height = 7 if (wx + wy) % 2 else 8
+            outline(wx, wy, width, height)
+            if (wx + wy + i) % 4 == 0:
+                line(wx + 2, wy + 2, wx + width - 2, wy + height - 3)
+            elif (wx * 3 + wy) % 5 == 0:
+                line(wx + 1, wy + height - 2, wx + width - 2, wy + 2)
+    # Drain pipes and a few cracked, exposed wall edges.
+    pipe_x = x + w - 6
+    line(pipe_x, y + 2, pipe_x, y + h - 3)
+    line(pipe_x - 2, y + 20, pipe_x + 1, y + 20)
+    line(x + 5, y + h // 2, x + 9, y + h // 2 + 6)
+    line(x + 9, y + h // 2 + 6, x + 7, y + h // 2 + 13)
+
+# Sagging utility wires, cables, and distant aerials break up the polluted sky.
+line(0, 49, 83, 61)
+line(83, 61, 160, 47)
+line(160, 47, 238, 58)
+line(238, 58, 319, 46)
+for x, y in ((35, 54), (104, 57), (218, 55), (292, 50)):
+    line(x, y - 7, x, y + 3)
+    pixel(x - 2, y - 7)
+    pixel(x + 2, y - 7)
+
+# Street silhouette: broken kerb, drain slots, debris, and a simple barricade.
+line(0, 166, 91, 166)
+line(108, 166, 210, 166)
+line(230, 166, 319, 166)
+line(0, 174, 70, 174)
+line(250, 174, 319, 174)
+for x in (24, 37, 188, 202, 277, 291):
+    line(x, 181, x + 5, 181)
+    line(x + 1, 184, x + 4, 184)
+outline(118, 155, 42, 15)
+line(121, 158, 137, 171)
+line(139, 158, 155, 171)
+line(123, 170, 151, 170)
+line(86, 190, 108, 188)
+line(210, 192, 238, 190)
 
 def asm_bytes(values):
     return "    !byte " + ",".join(f"${b:02x}" for b in values)
 
+
 out = ["; Generated by tools/convert_background.py; do not edit.",
        "BackgroundBitmap:"]
 for i in range(0, len(bitmap), 16):
-    out.append(asm_bytes(bitmap[i:i+16]))
+    out.append(asm_bytes(bitmap[i:i + 16]))
 out += ["BackgroundColors:"]
 for i in range(0, len(colors), 16):
-    out.append(asm_bytes(colors[i:i+16]))
+    out.append(asm_bytes(colors[i:i + 16]))
 (ROOT / "src/generated_background.asm").write_text("\n".join(out) + "\n")
