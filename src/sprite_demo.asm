@@ -27,6 +27,8 @@ MinY = 20
 MaxY = 136
 SourcePtr = $02                 ; unused KERNAL/BASIC zero-page workspace
 Ptr = $04
+HistoryXPtr = $06
+HistoryYPtr = $08
 
 Start:
     sei
@@ -82,8 +84,9 @@ Frame:
     sta SavedCpuPort
     and #$fd
     sta $01
-    jsr ClearBackBitmap
+    jsr RestorePreviousActorAreas
     jsr DrawActors
+    jsr SaveActorPositions
     lda SavedCpuPort
     sta $01
     cli
@@ -95,8 +98,9 @@ RenderBack:
     sta SavedCpuPort
     and #$fe
     sta $01
-    jsr ClearBackBitmap
+    jsr RestorePreviousActorAreas
     jsr DrawActors
+    jsr SaveActorPositions
     lda SavedCpuPort
     sta $01
 RenderComplete:
@@ -129,30 +133,14 @@ DrawActor:
     sta BaseX
     lda ActorY,x
     sta BaseY
+    ; Remove background ink and any farther contour from this opaque shape
+    ; before drawing its own outer and inner contours back over the sprite.
+    jsr ClearBitmapUnderActor
     jsr DrawOutline
     inc DrawOrderIndex
     lda DrawOrderIndex
     cmp #$08
     bne DrawActor
-    ; Clear background and contour ink under every opaque sprite only after
-    ; all contours are drawn. This keeps background details off the characters
-    ; without hiding the contour around their silhouettes.
-    ldx #$00
-    stx DrawOrderIndex
-ClearActorInterior:
-    ldx DrawOrderIndex
-    lda RenderOrder,x
-    sta ActorIndex
-    tax
-    lda ActorX,x
-    sta BaseX
-    lda ActorY,x
-    sta BaseY
-    jsr ClearBitmapUnderActor
-    inc DrawOrderIndex
-    lda DrawOrderIndex
-    cmp #$08
-    bne ClearActorInterior
     rts
 
 ; Clear bitmap ink under this actor's opaque pixels. Transparent parts keep
@@ -195,8 +183,8 @@ SelectSilhouetteRecords:
     lda SilhouetteSparseRows,x
     sta MaskRowCount
 
-; Each sparse row stores a row number, byte-position bitset, and its nonzero
-; mask bytes. This avoids loading or shifting empty mask bytes at runtime.
+; Each sparse row stores its row number and a count of byte-position/value
+; pairs, so empty bitmap bytes are skipped entirely.
 DrawSparseMask:
 DrawSparseMaskRow:
     lda MaskRowCount
@@ -208,7 +196,7 @@ SparseMaskHasRows:
     sta MaskEntryRow
     iny
     lda (SourcePtr),y
-    sta MaskByteMask
+    sta MaskByteCount
     clc
     lda SourcePtr
     adc #$02
@@ -235,17 +223,20 @@ SparseRowDataReady:
     bcc MaskRowAddressReady
     inc Ptr+1
 MaskRowAddressReady:
-    lda #$00
-    sta MaskByteIndex
-    lda #$01
-    sta MaskEntryBit
 DrawSparseMaskByte:
-    lda MaskByteMask
-    and MaskEntryBit
-    beq SkipSparseMaskByte
     ldy #$00
     lda (SourcePtr),y
+    sta MaskByteIndex
+    iny
+    lda (SourcePtr),y
     sta MaskEntryValue
+    clc
+    lda SourcePtr
+    adc #$02
+    sta SourcePtr
+    bcc SparseMaskPairReady
+    inc SourcePtr+1
+SparseMaskPairReady:
     ldx MaskByteIndex
     txa
     asl
@@ -264,17 +255,7 @@ EraseSparseByte:
     and (Ptr),y
     sta (Ptr),y
 AdvanceSparseValue:
-    clc
-    lda SourcePtr
-    adc #$01
-    sta SourcePtr
-    bcc SkipSparseMaskByte
-    inc SourcePtr+1
-SkipSparseMaskByte:
-    asl MaskEntryBit
-    inc MaskByteIndex
-    lda MaskByteIndex
-    cmp #$07
+    dec MaskByteCount
     bne DrawSparseMaskByte
     dec MaskRowCount
     jmp DrawSparseMaskRow
@@ -328,9 +309,135 @@ CopyToBank3Column:
 CopyToBank3Done:
     rts
 
-; Restore the static scene before recompositing actor pixels.
-ClearBackBitmap:
-    jmp CopyBackgroundToBack
+; Restore only the actor regions left in this buffer on its previous use.
+RestorePreviousActorAreas:
+    jsr SelectActorHistory
+    beq RestoreDirtyAreasDone
+    ldx #$00
+RestoreDirtyActorLoop:
+    stx DirtyActorIndex
+    txa
+    tay
+    lda (HistoryXPtr),y
+    sta BaseX
+    lda (HistoryYPtr),y
+    sta BaseY
+    jsr RestoreDirtyActorArea
+    ldx DirtyActorIndex
+    inx
+    cpx #$08
+    bne RestoreDirtyActorLoop
+RestoreDirtyAreasDone:
+    rts
+
+; Each actor's contour mask fits within a 48x42-pixel box. Restore the
+; previous box, rounded to eight-pixel columns, from the immutable background.
+RestoreDirtyActorArea:
+    lda #$00
+    sta DirtyRow
+RestoreDirtyRow:
+    lda DirtyRow
+    clc
+    adc BaseY
+    tay
+    lda RowLo,y
+    sta SourcePtr
+    sta Ptr
+    lda RowHi,y
+    clc
+    adc #$20                    ; static background starts at $2000
+    sta SourcePtr+1
+    lda RowHi,y
+    clc
+    adc BackBitmapHi
+    sta Ptr+1
+    lda BaseX
+    and #$f8                    ; each eight-pixel bitmap column is eight bytes
+    clc
+    adc SourcePtr
+    sta SourcePtr
+    bcc DirtySourceAddressReady
+    inc SourcePtr+1
+DirtySourceAddressReady:
+    lda BaseX
+    and #$f8
+    clc
+    adc Ptr
+    sta Ptr
+    bcc DirtyDestinationAddressReady
+    inc Ptr+1
+DirtyDestinationAddressReady:
+    lda #$00
+    sta DirtyColumnOffset
+RestoreDirtyRowByte:
+    ldy DirtyColumnOffset
+    lda (SourcePtr),y
+    sta (Ptr),y
+    clc
+    lda DirtyColumnOffset
+    adc #$08
+    sta DirtyColumnOffset
+    cmp #$38                    ; seven bitmap columns cover both X alignments
+    bne RestoreDirtyRowByte
+    inc DirtyRow
+    lda DirtyRow
+    cmp #$2a                    ; 42 sprite scanlines
+    bne RestoreDirtyRow
+    rts
+
+; Save positions independently for each bitmap; each buffer is reused every
+; other frame, after the actors have moved twice.
+SaveActorPositions:
+    jsr SelectActorHistory
+    ldx #$00
+SaveActorPositionLoop:
+    txa
+    tay
+    lda ActorX,x
+    sta (HistoryXPtr),y
+    lda ActorY,x
+    sta (HistoryYPtr),y
+    inx
+    cpx #$08
+    bne SaveActorPositionLoop
+    lda BackBitmapHi
+    cmp #$e0
+    beq SaveBank3Positions
+    lda #$01
+    sta DirtyBank1Valid
+    rts
+SaveBank3Positions:
+    lda #$01
+    sta DirtyBank3Valid
+    rts
+
+; Select the saved positions for the bitmap currently being rendered. Return
+; its valid flag in A; both flags start clear because both bitmaps start clean.
+SelectActorHistory:
+    lda BackBitmapHi
+    cmp #$e0
+    beq SelectBank3History
+    lda #<PreviousActorXBank1
+    sta HistoryXPtr
+    lda #>PreviousActorXBank1
+    sta HistoryXPtr+1
+    lda #<PreviousActorYBank1
+    sta HistoryYPtr
+    lda #>PreviousActorYBank1
+    sta HistoryYPtr+1
+    lda DirtyBank1Valid
+    rts
+SelectBank3History:
+    lda #<PreviousActorXBank3
+    sta HistoryXPtr
+    lda #>PreviousActorXBank3
+    sta HistoryXPtr+1
+    lda #<PreviousActorYBank3
+    sta HistoryYPtr
+    lda #>PreviousActorYBank3
+    sta HistoryYPtr+1
+    lda DirtyBank3Valid
+    rts
 
 InitSprites:
     ; Multicolour + 2x width and height. Install patterns in both VIC banks.
@@ -559,10 +666,12 @@ HorizontalShift: !byte 0
 MaskMode:       !byte 0
 MaskRowCount:   !byte 0
 MaskEntryRow:   !byte 0
-MaskByteMask:   !byte 0
+MaskByteCount:  !byte 0
 MaskByteIndex:  !byte 0
-MaskEntryBit:   !byte 0
 MaskEntryValue: !byte 0
+DirtyActorIndex: !byte 0
+DirtyRow:       !byte 0
+DirtyColumnOffset: !byte 0
 DrawOrderIndex: !byte 0
 SpriteSlot:     !byte 0
 SortPass:       !byte 0
@@ -574,6 +683,12 @@ RenderOrder:    !fill 8, 0
 BackBitmapHi:   !byte $e0
 BackBank:       !byte $00
 SavedCpuPort:   !byte $37
+DirtyBank1Valid: !byte 0
+DirtyBank3Valid: !byte 0
+PreviousActorXBank1: !fill 8, 0
+PreviousActorYBank1: !fill 8, 0
+PreviousActorXBank3: !fill 8, 0
+PreviousActorYBank3: !fill 8, 0
 
 ; Static background source data fits in unused RAM below the two VIC banks.
 * = $2000

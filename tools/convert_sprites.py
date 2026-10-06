@@ -40,8 +40,8 @@ for n, block in enumerate(blocks):
 
 # Precompute horizontally shifted masks for the two reachable alignments (0
 # and 4 pixels). Each
-# nonempty row stores its row number, a seven-bit byte-position mask, then only
-# the nonzero byte values in position order.
+# nonempty row stores its row number and only the occupied byte-position/value
+# pairs, so the renderer never tests empty byte slots.
 out.append("* = $8000")  # Keep tables outside the bitmap buffers at $6000/$a000.
 mask_tables = {"Silhouette": [], "Contour": []}
 for n, block in enumerate(blocks):
@@ -71,13 +71,17 @@ for n, block in enumerate(blocks):
                 rows[y][px // 8] |= 0x80 >> (px & 7)
             row_records = []
             for y, row in enumerate(rows):
-                byte_mask = sum(1 << byte_index for byte_index, value in enumerate(row) if value)
-                if byte_mask:
-                    row_records.append((y, byte_mask, [value for value in row if value]))
+                entries = [(byte_index, value)
+                           for byte_index, value in enumerate(row) if value]
+                if entries:
+                    row_records.append((y, entries))
             name = f"{label}Sparse{n}_{shift}"
             out.append(f"{name}:")
-            for y, byte_mask, values in row_records:
-                out.append(asm_bytes([y, byte_mask] + values))
+            for y, entries in row_records:
+                encoded = [y, len(entries)]
+                for byte_index, value in entries:
+                    encoded.extend((byte_index, value))
+                out.append(asm_bytes(encoded))
             mask_tables[label].append((name, len(row_records)))
 
 for label, entries in mask_tables.items():

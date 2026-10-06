@@ -9,17 +9,20 @@ around a hires bitmap screen. Each character is made from two layers:
 The demo uses one hardware sprite per character and reuses four character
 designs across the eight sprites. Each frame sorts the characters by vertical
 position from back to front. The bitmap renderer composites the character
-contours, then clears bitmap ink under every opaque sprite pixel. Hardware
-sprite slots use the same depth order, since lower numbered VIC-II sprites
-have higher priority when sprites overlap. The characters bounce inside the
-visible bitmap area. The demo renders the
-next hires frame into a hidden VIC-II bank, then switches banks at the bottom
-of the screen. Each frame starts by restoring the static background to that
-buffer, draws the character contours, then removes all black ink from opaque
-sprite pixels so background details cannot cross the characters. A colored,
-pixel-art dystopian neighborhood provides
-the background in both buffers, with black outlines and facade details over
-the per-cell colors.
+contours in depth order: it clears background and farther contour ink under
+each opaque shape, then draws that character's outer and inner contours.
+Hardware sprite slots use the same depth order, since lower numbered VIC-II
+sprites have higher priority when sprites overlap. The characters bounce inside the
+visible bitmap area. At startup, the static 8 KB bitmap background is copied
+into both VIC-II banks. The demo renders each new frame into a hidden bank, then
+switches banks at the bottom of the screen. When a bank is reused, it restores
+only the previous sprite regions from the static background. It then draws the
+new contours in depth order, clearing farther ink under each opaque shape before
+adding that character's own contour. Each bank keeps its own previous sprite
+positions, so old outlines are cleared from the right locations without copying
+the full background every frame. A colored,
+pixel-art dystopian neighborhood provides the background in both buffers,
+with black outlines and facade details over the per-cell colors.
 
 ## Build and run
 
@@ -51,15 +54,16 @@ appears. It is a useful comparison if `make run` remains at `LOADING`.
 ## Assembly routines
 
 `SortActors` produces a stable back-to-front order using each actor's Y
-coordinate. `DrawActors` draws each 48x42 sprite contour, then clears background
-and overlapping contour ink under every opaque sprite silhouette. The converter
-pre-shifts silhouette and
-contour masks for the two reachable pixel alignments (0 and 4) and stores each
-nonempty row as a byte-position bitset followed by its nonzero bytes. Actors
+coordinate. `RestorePreviousActorAreas` restores up to seven 8-pixel bitmap
+columns by 42 rows for each previous sprite position (at most 2,352 bytes per
+buffer update), using separate position histories for the two banks.
+`DrawActors` clears background and farther contour ink under each opaque
+48x42 silhouette, then draws that actor's outer and inner contour. The converter
+pre-shifts silhouette and contour masks for the two reachable pixel alignments
+(0 and 4), storing only occupied byte-position/value pairs in each row. Actors
 start on four-pixel boundaries and move horizontally in four-pixel steps, so
 no other alignments are needed. The renderer visits only occupied bitmap bytes
-and computes a row address once per nonempty row. Each hidden bitmap is restored
-from the static scene before compositing. Hardware sprite registers are then
+and computes a row address once per nonempty row. Hardware sprite registers are
 mapped from the same depth order before the bitmap banks swap.
 
 The sprite converter packs four 12x21 multicolour pixels per row into the
