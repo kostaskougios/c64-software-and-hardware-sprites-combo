@@ -46,11 +46,11 @@ make run-chars
 ```
 
 This builds `build/sprite-demo-chars.prg`. It reuses the same eight sprites,
-designs, depth sorting, and movement. The character background uses 32 base
+designs, depth sorting, and movement. The character background uses 20 base
 glyphs; uncommon cell patterns are approximated. The moving contour atlas
-contains 425 distinct mask glyphs, so per-cell mask maps use 16-bit IDs.
-Dynamic composites use character codes 32-255; the worst-case movement touches
-220 cells, leaving four spare glyphs. Separate character sets are used for the
+contains 434 distinct mask glyphs, so per-cell mask maps use 16-bit IDs.
+Dynamic composites use character codes 20-255; the silhouette masks touch up
+to 230 cells, leaving six spare glyphs. Separate character sets are used for the
 two screen buffers. The contour masks follow the expanded 48-by-42 pixel sprite
 shape, its reachable pixel alignments, and interior seams around the light-grey
 features. Character-mode sprites use 2x width and height expansion and keep
@@ -58,8 +58,9 @@ three opaque colors. The bitmap build keeps its original renderer and remains
 available with `make run`.
 
 City linework and moving outline masks both use multicolor code 10, which reads
-the shared black VIC-II color. Background fill uses code 00 and remains behind
-the hardware sprites.
+the shared black VIC-II color. The compositor clears city ink under each opaque
+sprite silhouette before adding its outline and interior seams. Background fill
+uses code 00 and remains behind the hardware sprites.
 
 To check VICE startup and PRG execution without using the emulated disk drive,
 run the standalone hello program:

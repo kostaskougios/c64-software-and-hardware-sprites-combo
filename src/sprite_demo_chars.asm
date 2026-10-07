@@ -378,8 +378,8 @@ UpdateActorCellGridDone:
     rts
 
 DrawCharacterOutlines:
-    lda #$20
-    sta NextCompositeCode       ; dynamic composite glyphs occupy codes 32-255
+    lda #$14
+    sta NextCompositeCode       ; dynamic composite glyphs occupy codes 20-255
     lda BackBuffer
     beq DrawFont1
     lda #$60
@@ -491,7 +491,7 @@ DrawCharacterOutlinesDone:
 ; screen buffer has its own charset, so only the hidden page is modified.
 ComposeOutlineCell:
     lda (ScreenRowPtr),y
-    cmp #$20
+    cmp #$14
     bcs ExistingComposite
     sta BackgroundCode
     lda NextCompositeCode
@@ -527,10 +527,20 @@ ComposeGlyphRow:
 ComposeGlyphPair:
     lda MaskByte
     and PairInk,x
-    beq ComposePairNext
+    beq ComposePairCoverage
+    ; Code 10 mask pixel: draw shared black foreground ink.
     lda GlyphByte
     and PairClear,x
     ora PairInk,x
+    sta GlyphByte
+    jmp ComposePairNext
+ComposePairCoverage:
+    lda MaskByte
+    and PairCoverage,x
+    beq ComposePairNext
+    ; Code 01 mask pixel: erase city ink under opaque sprite coverage.
+    lda GlyphByte
+    and PairClear,x
     sta GlyphByte
 ComposePairNext:
     inx
@@ -813,6 +823,7 @@ TargetCellOffset: !byte 0
 MaskByte: !byte 0
 GlyphByte: !byte 0
 PairInk: !byte $80,$20,$08,$02
+PairCoverage: !byte $40,$10,$04,$01
 PairClear: !byte $3f,$cf,$f3,$fc
 
 CharacterRowLo:
