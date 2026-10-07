@@ -454,11 +454,12 @@ DrawOutlineRow:
 DrawOutlineColumn:
     ldy MapOffset
     lda (MapPtr),y
-    beq OutlineCellEmpty
     sta OutlineChar
     iny
     lda (MapPtr),y
     sta OutlineCharHi
+    ora OutlineChar
+    beq OutlineCellEmpty
     lda BaseCellX
     clc
     adc CellColumn
