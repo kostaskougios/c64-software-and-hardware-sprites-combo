@@ -47,12 +47,17 @@ def outline(x, y, width, height):
 buildings = [
     (0, 70, 54, 111, 11),
     (48, 58, 51, 123, 12),
-    (96, 78, 46, 103, 8),
+    (96, 78, 46, 103, 13),
     (139, 48, 64, 133, 11),
     (198, 67, 48, 114, 12),
-    (242, 54, 43, 127, 8),
+    (242, 54, 43, 127, 13),
     (279, 75, 41, 106, 11),
 ]
+building_fill = bytearray(320 * 200)
+for bx, by, bw, bh, _ in buildings:
+    for y in range(by, by + bh):
+        start = y * 320 + bx
+        building_fill[start:start + bw] = b"\x01" * bw
 for cy in range(25):
     for cx in range(40):
         x, y = cx * 8 + 4, cy * 8 + 4
@@ -64,7 +69,7 @@ for cy in range(25):
                 color = facade
                 # Muted cell-by-cell banding suggests stained concrete.
                 if ((cx * 3 + cy * 5) % 11) == 0:
-                    color = 12 if facade == 11 else (11 if facade == 12 else 9)
+                    color = 12 if facade == 11 else (11 if facade == 12 else 14)
                 break
         colors[cy * 40 + cx] = color
 
@@ -151,9 +156,13 @@ for cy in range(25):
             encoded = 0
             for pair in range(4):
                 bits = (source >> (6 - pair * 2)) & 0x03
-                # Use shared code 10 for black linework; code 00 uses the
-                # raster-colored sky/city fill.
-                encoded = (encoded << 2) | (2 if bits else 0)
+                x = cx * 8 + pair * 2
+                inside_building = (building_fill[y * 320 + x]
+                                   or building_fill[y * 320 + x + 1])
+                # Code 10 is shared black linework. Code 11 uses per-cell
+                # color RAM for building facades; code 00 stays raster-filled.
+                code = 2 if bits else (3 if inside_building else 0)
+                encoded = (encoded << 2) | code
             rows.append(encoded)
         cells.append(tuple(rows))
 from collections import Counter

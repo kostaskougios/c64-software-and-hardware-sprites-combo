@@ -58,9 +58,11 @@ three opaque colors. The bitmap build keeps its original renderer and remains
 available with `make run`.
 
 City linework and moving outline masks both use multicolor code 10, which reads
-the shared black VIC-II color. The compositor clears city ink under each opaque
-sprite silhouette before adding its outline and interior seams. Background fill
-uses code 00 and remains behind the hardware sprites.
+the shared black VIC-II color. Building interiors use code 11 and their
+per-cell colors for cyan, purple, and green facade variety. The compositor
+clears character pixels under each opaque sprite silhouette before adding its
+outline and interior seams. Background fill uses code 00 and remains behind
+the hardware sprites.
 
 To check VICE startup and PRG execution without using the emulated disk drive,
 run the standalone hello program:
