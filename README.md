@@ -52,9 +52,10 @@ contains 425 distinct mask glyphs, so per-cell mask maps use 16-bit IDs.
 Dynamic composites use character codes 32-255; the worst-case movement touches
 220 cells, leaving four spare glyphs. Separate character sets are used for the
 two screen buffers. The contour masks follow the expanded 48-by-42 pixel sprite
-shape and its reachable pixel alignments. Character-mode sprites use 2x width
-and height expansion and keep three opaque colors. The bitmap build keeps its
-original renderer and remains available with `make run`.
+shape, its reachable pixel alignments, and interior seams around the light-grey
+features. Character-mode sprites use 2x width and height expansion and keep
+three opaque colors. The bitmap build keeps its original renderer and remains
+available with `make run`.
 
 City linework and moving outline masks both use multicolor code 10, which reads
 the shared black VIC-II color. Background fill uses code 00 and remains behind

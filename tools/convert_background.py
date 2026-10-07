@@ -193,18 +193,29 @@ outline_maps = []
 character_sprite_data = []
 for design, block in enumerate(blocks):
     solid = set()
+    details = set()
     for y, row in enumerate(block):
         for x, ch in enumerate(row.ljust(12, ".")):
             if ch != ".":
                 # Each multicolor sample is 2 pixels wide by 1 raster line;
                 # sprite expansion makes it 4x2, spanning 48x42 overall.
-                solid.update((x * 4 + dx, y * 2 + dy)
-                             for dx in range(4) for dy in range(2))
+                expanded = {(x * 4 + dx, y * 2 + dy)
+                            for dx in range(4) for dy in range(2)}
+                solid.update(expanded)
+                if ch == "1":
+                    details.update(expanded)
     contour = set()
     for x, y in solid:
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             p = (x + dx, y + dy)
             if p not in solid and -1 <= p[0] <= 48 and -1 <= p[1] <= 42:
+                contour.add(p)
+    # Add a one-pixel black seam around the light-grey feature regions, but
+    # keep it inside the opaque sprite silhouette so it reads as interior ink.
+    for x, y in details:
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            p = (x + dx, y + dy)
+            if p in solid and p not in details:
                 contour.add(p)
     # Preserve the original three sprite pixel codes. Black contours live in
     # the character layer outside the sprite, rather than consuming a sprite color.

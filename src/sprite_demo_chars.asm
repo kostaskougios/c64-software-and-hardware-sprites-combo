@@ -180,8 +180,8 @@ InitSprites:
     sta $d01c
     sta $d01d                  ; 2x width: 48 pixels
     sta $d017
-    lda #$00
-    sta $d01b                  ; hardware sprites stay in front of character pixels
+    lda #$ff
+    sta $d01b                  ; black character ink overlays sprites; code-00 fill stays behind
     lda #$0f
     sta $d025                  ; shared light-grey sprite color
     lda #$0c
