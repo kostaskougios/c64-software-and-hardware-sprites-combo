@@ -2,7 +2,7 @@ ACME ?= acme
 PYTHON ?= python3
 VICE ?= x64sc
 
-.PHONY: all sprites backgrounds run run-hello clean
+.PHONY: all sprites backgrounds run run-chars run-hello clean
 
 all: build/sprite-demo.prg
 
@@ -13,12 +13,19 @@ backgrounds: src/generated_background.asm
 src/generated_sprites.asm: data/characters.txt tools/convert_sprites.py
 	$(PYTHON) tools/convert_sprites.py
 
-src/generated_background.asm: tools/convert_background.py
+src/generated_background.asm: tools/convert_background.py data/characters.txt
+	$(PYTHON) tools/convert_background.py
+
+src/generated_characters.asm: tools/convert_background.py data/characters.txt
 	$(PYTHON) tools/convert_background.py
 
 build/sprite-demo.prg: src/sprite_demo.asm src/generated_sprites.asm src/generated_background.asm
 	@mkdir -p build
 	$(ACME) -f cbm -o $@ src/sprite_demo.asm
+
+build/sprite-demo-chars.prg: src/sprite_demo_chars.asm src/generated_sprites.asm src/generated_characters.asm
+	@mkdir -p build
+	$(ACME) -f cbm -o $@ src/sprite_demo_chars.asm
 
 build/hello.prg: src/hello.asm
 	@mkdir -p build
@@ -27,9 +34,12 @@ build/hello.prg: src/hello.asm
 run: build/sprite-demo.prg
 	$(VICE) -warp -autostart-handle-tde -autostart $<
 
+run-chars: build/sprite-demo-chars.prg
+	$(VICE) -warp -autostart-handle-tde -autostart $<
+
 # Inject this tiny PRG directly into memory, bypassing the emulated disk drive.
 run-hello: build/hello.prg
 	$(VICE) -warp -autostartprgmode 1 -autostart $<
 
 clean:
-	rm -rf build src/generated_sprites.asm src/generated_background.asm
+	rm -rf build src/generated_sprites.asm src/generated_background.asm src/generated_characters.asm

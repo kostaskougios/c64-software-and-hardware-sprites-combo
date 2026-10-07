@@ -39,6 +39,27 @@ and true-drive emulation temporarily disabled during PRG autostart. Turn warp
 off once the game appears. The equivalent command is
 `x64sc -warp -autostart-handle-tde -autostart build/sprite-demo.prg`.
 
+To run the character-mode version, use:
+
+```sh
+make run-chars
+```
+
+This builds `build/sprite-demo-chars.prg`. It reuses the same eight sprites,
+designs, depth sorting, and movement. The character background uses 32 base
+glyphs; uncommon cell patterns are approximated. The moving contour atlas
+contains 425 distinct mask glyphs, so per-cell mask maps use 16-bit IDs.
+Dynamic composites use character codes 32-255; the worst-case movement touches
+220 cells, leaving four spare glyphs. Separate character sets are used for the
+two screen buffers. The contour masks follow the expanded 48-by-42 pixel sprite
+shape and its reachable pixel alignments. Character-mode sprites use 2x width
+and height expansion and keep three opaque colors. The bitmap build keeps its
+original renderer and remains available with `make run`.
+
+City linework and moving outline masks both use multicolor code 10, which reads
+the shared black VIC-II color. Background fill uses code 00 and remains behind
+the hardware sprites.
+
 To check VICE startup and PRG execution without using the emulated disk drive,
 run the standalone hello program:
 

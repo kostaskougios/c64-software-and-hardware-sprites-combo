@@ -138,4 +138,135 @@ for i in range(0, len(bitmap), 16):
 out += ["BackgroundColors:"]
 for i in range(0, len(colors), 16):
     out.append(asm_bytes(colors[i:i + 16]))
+# Multicolor character pixels provide a transparent background code and a
+# foreground code for black contour ink. The outline tracks sprites in 4-pixel
+# vertical steps, leaving room for the background and contour glyphs together.
+cells = []
+for cy in range(25):
+    for cx in range(40):
+        rows = []
+        for y in range(cy * 8, cy * 8 + 8):
+            address = (y & 7) + (y >> 3) * 320 + cx * 8
+            source = bitmap[address]
+            encoded = 0
+            for pair in range(4):
+                bits = (source >> (6 - pair * 2)) & 0x03
+                # Use shared code 10 for black linework; code 00 uses the
+                # raster-colored sky/city fill.
+                encoded = (encoded << 2) | (2 if bits else 0)
+            rows.append(encoded)
+        cells.append(tuple(rows))
+from collections import Counter
+blank = (0,) * 8
+background_glyph_count = 32
+frequent = [blank] + [g for g, _ in Counter(cells).most_common() if g != blank][:background_glyph_count - 1]
+glyph_ids = {glyph: i for i, glyph in enumerate(frequent)}
+codes = []
+for glyph in cells:
+    if glyph in glyph_ids:
+        codes.append(glyph_ids[glyph])
+        continue
+    best_id, best_distance = 0, 65
+    for candidate_id, candidate in enumerate(frequent):
+        distance = sum((a ^ b).bit_count() for a, b in zip(glyph, candidate))
+        if distance < best_distance:
+            best_id, best_distance = candidate_id, distance
+    codes.append(best_id)
+character_out = ["; Generated character-mode background and moving contour glyphs; do not edit.", "CharacterGlyphs:"]
+
+# Build the outer silhouette and internal feature contours as software glyphs.
+blocks = []
+current = []
+for line_text in (ROOT / "data/characters.txt").read_text().splitlines():
+    line_text = line_text.strip()
+    if not line_text or line_text.startswith("#"):
+        if current:
+            blocks.append(current)
+            current = []
+    else:
+        current.append(line_text)
+if current:
+    blocks.append(current)
+
+outline_fragments = {}
+outline_maps = []
+character_sprite_data = []
+for design, block in enumerate(blocks):
+    solid = set()
+    for y, row in enumerate(block):
+        for x, ch in enumerate(row.ljust(12, ".")):
+            if ch != ".":
+                # Each multicolor sample is 2 pixels wide by 1 raster line;
+                # sprite expansion makes it 4x2, spanning 48x42 overall.
+                solid.update((x * 4 + dx, y * 2 + dy)
+                             for dx in range(4) for dy in range(2))
+    contour = set()
+    for x, y in solid:
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            p = (x + dx, y + dy)
+            if p not in solid and -1 <= p[0] <= 48 and -1 <= p[1] <= 42:
+                contour.add(p)
+    # Preserve the original three sprite pixel codes. Black contours live in
+    # the character layer outside the sprite, rather than consuming a sprite color.
+    for y, row in enumerate(block):
+        chars = list(row.ljust(12, "."))
+        for offset in range(0, 12, 4):
+            value = 0
+            for ch in chars[offset:offset + 4]:
+                value = (value << 2) | (0 if ch == "." else int(ch))
+            character_sprite_data.append(value)
+    character_sprite_data.append(0)  # one unused byte after each 21-row sprite
+    for x_phase in (0, 4):
+        for y_phase in range(8):
+            tiles = {}
+            for x, y in contour:
+                # Leave one full character cell of padding so top/left contour
+                # pixels have screen cells even when the sprite is cell-aligned.
+                px, py = x + x_phase + 8, y + y_phase + 8
+                tx, ty = px // 8, py // 8
+                rows = tiles.setdefault((tx, ty), [0] * 8)
+                # Multicolor characters stretch each 2-bit pixel to two
+                # screen pixels. Code 10 uses the shared black VIC-II color.
+                rows[py & 7] |= 0x02 << (6 - ((px & 7) // 2) * 2)
+            tile_codes = [0] * 64
+            for (tx, ty), rows in tiles.items():
+                glyph = tuple(rows)
+                if glyph not in outline_fragments:
+                    # Zero means an empty contour cell in the 8x8 map.
+                    outline_fragments[glyph] = len(outline_fragments) + 1
+                tile_codes[ty * 8 + tx] = outline_fragments[glyph]
+            outline_maps.append((design, x_phase, y_phase, tile_codes))
+
+if len(character_sprite_data) != 4 * 64:
+    raise SystemExit(f"Character sprite data must be 256 bytes, got {len(character_sprite_data)}")
+
+all_glyphs = list(frequent) + [None] * (256 - len(frequent))
+for i, glyph in enumerate(all_glyphs):
+    character_out.append(asm_bytes(glyph or blank))
+character_out += ["CharacterScreen:"]
+for i in range(0, len(codes), 16):
+    character_out.append(asm_bytes(codes[i:i + 16]))
+character_out += ["CharacterColors:"]
+for i in range(0, len(colors), 16):
+    character_out.append(asm_bytes([(c & 7) | 8 for c in colors[i:i + 16]]))
+map_labels = [f"CharacterOutline_{d}_{xp}_{yp}" for d, xp, yp, _ in outline_maps]
+character_out += ["CharacterOutlineLo:", "    !byte " + ",".join(f"<{n}" for n in map_labels),
+                  "CharacterOutlineHi:", "    !byte " + ",".join(f">{n}" for n in map_labels)]
+character_out += ["CharacterSpriteData:"]
+for i in range(0, len(character_sprite_data), 16):
+    character_out.append(asm_bytes(character_sprite_data[i:i + 16]))
+# 16-bit map entries address all 425 distinct contour tiles generated by the
+# four 2x sprites. Keep the 8 KiB map block and the contour glyph atlas outside
+# the VIC-visible bank; the CPU reads them while composing the hidden charset.
+character_out += ["    * = $a000"]
+for label, (_, _, _, tile_codes) in zip(map_labels, outline_maps):
+    character_out.append(label + ":")
+    tile_map = [byte for code in tile_codes for byte in (code & 0xff, code >> 8)]
+    for i in range(0, len(tile_map), 16):
+        character_out.append(asm_bytes(tile_map[i:i + 16]))
+character_out += ["    * = $c100", "CharacterContourGlyphs:"]
+character_out.append(asm_bytes(blank))  # contour map code zero means empty
+for glyph in outline_fragments:
+    character_out.append(asm_bytes(glyph))
 (ROOT / "src/generated_background.asm").write_text("\n".join(out) + "\n")
+(ROOT / "src/generated_characters.asm").write_text("\n".join(character_out) + "\n")
